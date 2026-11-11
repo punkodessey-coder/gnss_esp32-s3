@@ -2,13 +2,12 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
 #include <TinyGPSPlus.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
-#include <Adafruit_MPU6050.h>
-#include <Adafruit_Sensor.h>
+#include <Arduino_GFX_Library.h>
+#include <SensorQMI8658.hpp>
+#include <SD_MMC.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
@@ -20,10 +19,20 @@ const char* AP_PASS = "12345678";
 #define GPS_TX_PIN 17
 #define GPS_BAUD 9600
 
-#define OLED_SDA 8
-#define OLED_SCL 9
-#define OLED_ADDR 0x3C
-#define MPU_ADDR 0x68
+#define LCD_MOSI 45
+#define LCD_SCLK 40
+#define LCD_CS 42
+#define LCD_DC 41
+#define LCD_RST 39
+#define LCD_BL 46
+#define LCD_WIDTH 172
+#define LCD_HEIGHT 320
+
+#define IMU_SDA 43
+#define IMU_SCL 44
+#define QMI_ADDRESS 0x6B
+
+#define SD_MOUNT "/sdcard"
 
 #define BLE_SERVICE_UUID "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 #define BLE_NOTIFY_UUID "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
@@ -31,8 +40,9 @@ const char* AP_PASS = "12345678";
 
 HardwareSerial gpsSerial(2);
 TinyGPSPlus gps;
-Adafruit_SSD1306 display(128, 64, &Wire, -1);
-Adafruit_MPU6050 mpu;
+Arduino_DataBus *displayBus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD_MOSI);
+Arduino_GFX *gfx = new Arduino_ST7789(displayBus, LCD_RST, 0, true, LCD_WIDTH, LCD_HEIGHT, 34, 0, 34, 0);
+SensorQMI8658 qmi;
 WebServer server(80);
 Preferences preferences;
 
@@ -44,7 +54,7 @@ int satellites = 0;
 double hdop = 0.0;
 unsigned long lastFixMs = 0;
 
-bool mpuReady = false;
+bool imuReady = false;
 float ax = 0, ay = 0, az = 0;
 float gx = 0, gy = 0, gz = 0;
 float gyroOffsetX = 0, gyroOffsetY = 0, gyroOffsetZ = 0;
@@ -95,17 +105,18 @@ void startDisplayTest() {
 }
 
 void calibrateImuZero() {
-  if (!mpuReady) return;
+  if (!imuReady) return;
 
   float sumX = 0, sumY = 0, sumZ = 0;
   const int samples = 100;
 
   for (int i = 0; i < samples; i++) {
-    sensors_event_t a, g, temp;
-    mpu.getEvent(&a, &g, &temp);
-    sumX += g.gyro.x;
-    sumY += g.gyro.y;
-    sumZ += g.gyro.z;
+    float x, y, z;
+    if (qmi.getGyroscope(x, y, z)) {
+      sumX += x;
+      sumY += y;
+      sumZ += z;
+    }
     delay(5);
   }
 
@@ -133,18 +144,22 @@ void resetImuCalibration() {
 }
 
 void readImu() {
-  if (!mpuReady) return;
+  if (!imuReady) return;
+  if (!qmi.getDataReady()) return;
 
-  sensors_event_t a, g, temp;
-  mpu.getEvent(&a, &g, &temp);
+  float x, y, z;
 
-  ax = a.acceleration.x;
-  ay = a.acceleration.y;
-  az = a.acceleration.z;
+  if (qmi.getAccelerometer(x, y, z)) {
+    ax = x;
+    ay = y;
+    az = z;
+  }
 
-  gx = g.gyro.x - gyroOffsetX;
-  gy = g.gyro.y - gyroOffsetY;
-  gz = g.gyro.z - gyroOffsetZ;
+  if (qmi.getGyroscope(x, y, z)) {
+    gx = x - gyroOffsetX;
+    gy = y - gyroOffsetY;
+    gz = z - gyroOffsetZ;
+  }
 }
 
 String coordsJson() {
@@ -164,7 +179,7 @@ String coordsJson() {
 
 String imuJson() {
   JsonDocument doc;
-  doc["ready"] = mpuReady;
+  doc["ready"] = imuReady;
   doc["ax"] = ax;
   doc["ay"] = ay;
   doc["az"] = az;
@@ -176,6 +191,41 @@ String imuJson() {
   String out;
   serializeJson(doc, out);
   return out;
+}
+
+String mapsJson() {
+  JsonDocument doc;
+  JsonArray maps = doc["maps"].to<JsonArray>();
+
+  File root = SD_MMC.open("/maps");
+  if (root) {
+    File item = root.openNextFile();
+
+    while (item) {
+      if (item.isDirectory()) {
+        maps.add(String(item.name()));
+      }
+      item.close();
+      item = root.openNextFile();
+    }
+
+    root.close();
+  }
+
+  String out;
+  serializeJson(doc, out);
+  return out;
+}
+
+bool validMapName(const String& name) {
+  if (name.length() == 0 || name.length() > 32) return false;
+
+  for (unsigned int i = 0; i < name.length(); i++) {
+    char c = name[i];
+    if (!isalnum(c) && c != '_' && c != '-') return false;
+  }
+
+  return true;
 }
 
 void handleRoot() {
@@ -200,6 +250,7 @@ button.gray{background:#555}
 #map{height:50vh;border-radius:12px}
 .small{color:#aaa;font-size:13px}
 .hidden{display:none}
+select{padding:8px;border-radius:6px;background:#222;color:#eee;border:1px solid #444}
 </style>
 </head>
 <body>
@@ -218,6 +269,13 @@ button.gray{background:#555}
 <button class="gray" onclick="connectBle()">Подключить Bluetooth</button>
 <div id="bleStatus" class="small"></div>
 </div>
+
+<div class="card">
+<h2>Офлайн-карта</h2>
+<div class="small">Выберите папку карты на microSD</div>
+<select id="mapSelect"><option value="">Загрузка…</option></select>
+</div>
+
 <div id="map"></div>
 </div>
 
@@ -233,6 +291,9 @@ button.gray{background:#555}
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
+let currentMap='';
+let tileLayer=null;
+
 function showTab(name){
 document.getElementById('gpsTab').classList.toggle('hidden',name!=='gps');
 document.getElementById('imuTab').classList.toggle('hidden',name!=='imu');
@@ -240,9 +301,36 @@ document.getElementById('tabGpsBtn').classList.toggle('active',name==='gps');
 document.getElementById('tabImuBtn').classList.toggle('active',name==='imu');
 }
 
-const map=L.map('map').setView([55.7558,37.6173],12);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
-let marker=null;
+const map=L.map('map').setView([59.9386,30.3141],11);
+
+async function loadMaps(){
+try{
+const d=await (await fetch('/maps')).json();
+const select=document.getElementById('mapSelect');
+select.innerHTML='';
+if(!d.maps || d.maps.length===0){
+select.innerHTML='<option value="">Карты на SD не найдены</option>';
+return;
+}
+d.maps.forEach(name=>{
+const option=document.createElement('option');
+option.value=name;
+option.textContent=name;
+select.appendChild(option);
+});
+select.value=d.maps[0];
+selectMap(d.maps[0]);
+}catch(e){
+document.getElementById('mapSelect').innerHTML='<option value="">SD не доступна</option>';
+}
+}
+
+function selectMap(name){
+currentMap=name;
+if(tileLayer){map.removeLayer(tileLayer);tileLayer=null;}
+if(!name)return;
+tileLayer=L.tileLayer('/tiles?map='+encodeURIComponent(name)+'&z={z}&x={x}&y={y}',{maxZoom:19,minZoom:3,attribution:'Offline map'}).addTo(map);
+}
 
 async function refreshGps(){
 try{
@@ -251,14 +339,13 @@ if(!d.valid){document.getElementById('status').textContent='Нет GPS-фикс�
 const text=d.lat+', '+d.lng;
 document.getElementById('coords').textContent=text;
 document.getElementById('status').textContent='Спутников: '+d.sat+' | HDOP: '+d.hdop+' | обновлено '+Math.round(d.age_ms/1000)+' с назад';
-if(!marker){marker=L.marker([d.lat,d.lng]).addTo(map);map.setView([d.lat,d.lng],16);}else{marker.setLatLng([d.lat,d.lng]);map.panTo([d.lat,d.lng]);}
 }catch(e){}
 }
 
 async function refreshImu(){
 try{
 const d=await (await fetch('/imu')).json();
-if(!d.ready){document.getElementById('imuStatus').textContent='MPU6050 не найден';document.getElementById('imuData').textContent='—';return;}
+if(!d.ready){document.getElementById('imuStatus').textContent='QMI8658 не найден';document.getElementById('imuData').textContent='—';return;}
 document.getElementById('imuStatus').textContent=d.calibrated?'Калибровка нуля активна':'Калибровка не задана';
 document.getElementById('imuData').textContent='AX '+d.ax.toFixed(2)+' m/s2\nAY '+d.ay.toFixed(2)+' m/s2\nAZ '+d.az.toFixed(2)+' m/s2\n\nGX '+d.gx.toFixed(3)+' rad/s\nGY '+d.gy.toFixed(3)+' rad/s\nGZ '+d.gz.toFixed(3)+' rad/s';
 }catch(e){}
@@ -282,6 +369,11 @@ if(text!=='—')navigator.clipboard.writeText(text);
 }
 
 async function connectBle(){
+const status=document.getElementById('bleStatus');
+if(!navigator.bluetooth){
+status.textContent='Web Bluetooth не поддерживается этим браузером. Используйте Chrome или Edge.';
+return;
+}
 try{
 const device=await navigator.bluetooth.requestDevice({filters:[{namePrefix:'ESP32-GNSS'}],optionalServices:['6e400001-b5a3-f393-e0a9-e50e24dcca9e']});
 const server=await device.gatt.connect();
@@ -290,16 +382,18 @@ const characteristic=await service.getCharacteristic('6e400002-b5a3-f393-e0a9-e5
 await characteristic.startNotifications();
 characteristic.addEventListener('characteristicvaluechanged',e=>{
 const value=new TextDecoder().decode(e.target.value);
-document.getElementById('bleStatus').textContent='BLE: '+value;
+status.textContent='BLE: '+value;
 });
-document.getElementById('bleStatus').textContent='Bluetooth подключён';
+status.textContent='Bluetooth подключён';
 }catch(e){
-document.getElementById('bleStatus').textContent='Bluetooth: '+e.message;
+status.textContent='Bluetooth: '+e.message;
 }
 }
 
+document.getElementById('mapSelect').addEventListener('change',e=>selectMap(e.target.value));
 setInterval(()=>{if(!document.getElementById('gpsTab').classList.contains('hidden'))refreshGps();},2000);
 setInterval(()=>{if(!document.getElementById('imuTab').classList.contains('hidden'))refreshImu();},200);
+loadMaps();
 refreshGps();
 </script>
 </body>
@@ -317,6 +411,45 @@ void handleImu() {
   server.send(200, "application/json", imuJson());
 }
 
+void handleMaps() {
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", mapsJson());
+}
+
+void handleTile() {
+  if (!server.hasArg("map") || !server.hasArg("z") || !server.hasArg("x") || !server.hasArg("y")) {
+    server.send(400, "text/plain", "Missing parameters");
+    return;
+  }
+
+  String mapName = server.arg("map");
+  String z = server.arg("z");
+  String x = server.arg("x");
+  String y = server.arg("y");
+
+  if (!validMapName(mapName)) {
+    server.send(400, "text/plain", "Invalid map");
+    return;
+  }
+
+  String path = String(SD_MOUNT) + "/maps/" + mapName + "/" + z + "/" + x + "/" + y + ".png";
+
+  if (!SD_MMC.exists(path)) {
+    server.send(404, "text/plain", "Tile not found");
+    return;
+  }
+
+  File tile = SD_MMC.open(path);
+  if (!tile) {
+    server.send(500, "text/plain", "Cannot open tile");
+    return;
+  }
+
+  server.sendHeader("Cache-Control", "max-age=86400");
+  server.streamFile(tile, "image/png");
+  tile.close();
+}
+
 void handleDisplayTest() {
   startDisplayTest();
   server.send(200, "application/json", "{\"ok\":true}");
@@ -332,91 +465,115 @@ void handleResetCalibration() {
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
-void updateDisplay() {
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setCursor(0, 0);
+void drawDisplayTest() {
+  gfx->fillScreen(BLACK);
+  gfx->setTextColor(WHITE);
+  gfx->setTextSize(3);
+  gfx->setCursor(25, 40);
+  gfx->println("DISPLAY");
+  gfx->println("TEST");
 
+  gfx->fillRect(10, 150, 152, 35, RED);
+  gfx->fillRect(10, 195, 152, 35, GREEN);
+  gfx->fillRect(10, 240, 152, 35, BLUE);
+
+  gfx->setTextSize(1);
+  gfx->setCursor(10, 290);
+  gfx->print("Seconds left: ");
+  gfx->println((displayTestUntil - millis()) / 1000 + 1);
+
+  gfx->drawRect(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1, WHITE);
+}
+
+void updateDisplay() {
   if (displayTestActive) {
-    display.setTextSize(2);
-    display.println("DISPLAY");
-    display.println("TEST");
-    display.setTextSize(1);
-    display.setCursor(0, 50);
-    display.print("Seconds left: ");
-    display.println((displayTestUntil - millis()) / 1000 + 1);
-    display.drawRect(0, 0, 127, 63, SSD1306_WHITE);
-    display.display();
+    drawDisplayTest();
     return;
   }
+
+  gfx->fillScreen(BLACK);
+  gfx->setTextColor(WHITE);
+  gfx->setTextSize(2);
+  gfx->setCursor(10, 20);
 
   if (!haveFix) {
-    display.println("GPS: нет фикса");
-    display.println();
-    display.println("Wi-Fi:");
-    display.println(AP_SSID);
-    display.println(WiFi.softAPIP().toString());
-    display.println();
-    display.print("BLE: ");
-    display.println(bleConnected ? "ON" : "OFF");
-    display.display();
+    gfx->println("GPS:");
+    gfx->println("no fix");
+
+    gfx->setTextSize(1);
+    gfx->setCursor(10, 100);
+    gfx->println("Wi-Fi:");
+    gfx->println(AP_SSID);
+    gfx->println(WiFi.softAPIP().toString());
+    gfx->println();
+    gfx->print("BLE: ");
+    gfx->println(bleConnected ? "ON" : "OFF");
+    gfx->println();
+    gfx->print("IMU: ");
+    gfx->println(imuReady ? "OK" : "NOT FOUND");
     return;
   }
 
-  display.print("SAT: ");
-  display.println(satellites);
-  display.print("HDOP: ");
-  display.println(hdop, 1);
+  gfx->setTextSize(2);
+  gfx->print("LAT\n");
+  gfx->println(lat, 6);
+  gfx->print("LON\n");
+  gfx->println(lng, 6);
 
-  display.setCursor(0, 26);
-  display.print("LAT ");
-  display.println(lat, 6);
-  display.print("LON ");
-  display.println(lng, 6);
-
-  display.setCursor(0, 54);
-  display.print("ALT ");
-  display.print(altitude, 0);
-  display.print(" m");
-
-  display.display();
+  gfx->setTextSize(1);
+  gfx->setCursor(10, 250);
+  gfx->print("SAT: ");
+  gfx->println(satellites);
+  gfx->print("ALT: ");
+  gfx->print(altitude, 0);
+  gfx->println(" m");
 }
 
 void setup() {
   Serial.begin(115200);
 
-  Wire.begin(OLED_SDA, OLED_SCL);
-  Wire.setClock(400000);
+  pinMode(LCD_BL, OUTPUT);
+  digitalWrite(LCD_BL, HIGH);
 
-  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
-    Serial.println("OLED SSD1306 not found");
+  if (!gfx->begin()) {
+    Serial.println("ST7789 initialization failed");
+  } else {
+    Serial.println("ST7789 initialized");
   }
 
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println("ESP32 GNSS + IMU");
-  display.println("Starting...");
-  display.display();
+  gfx->fillScreen(BLACK);
+  gfx->setTextColor(WHITE);
+  gfx->setTextSize(2);
+  gfx->setCursor(10, 30);
+  gfx->println("ESP32-S3");
+  gfx->println("Starting...");
+
+  Wire.begin(IMU_SDA, IMU_SCL);
+  Wire.setClock(400000);
 
   preferences.begin("imu", false);
   gyroOffsetX = preferences.getFloat("gx", 0);
   gyroOffsetY = preferences.getFloat("gy", 0);
   gyroOffsetZ = preferences.getFloat("gz", 0);
 
-  if (mpu.begin(MPU_ADDR, &Wire)) {
-    mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
-    mpu.setGyroRange(MPU6050_RANGE_500_DEG);
-    mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
-    mpuReady = true;
-    Serial.println("MPU6050 ready");
+  if (qmi.begin(Wire, QMI_ADDRESS, IMU_SDA, IMU_SCL)) {
+    qmi.configAccelerometer(SensorQMI8658::ACC_RANGE_4G, SensorQMI8658::ACC_ODR_250Hz, SensorQMI8658::LPF_MODE_0);
+    qmi.configGyroscope(SensorQMI8658::GYR_RANGE_256DPS, SensorQMI8658::GYR_ODR_250Hz, SensorQMI8658::LPF_MODE_3);
+    qmi.enableAccelerometer();
+    qmi.enableGyroscope();
+    imuReady = true;
+    Serial.println("QMI8658 ready");
   } else {
-    Serial.println("MPU6050 not found");
+    Serial.println("QMI8658 not found");
   }
 
   gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
+
+  if (SD_MMC.begin(SD_MOUNT, true)) {
+    Serial.println("SD card mounted");
+  } else {
+    Serial.println("SD card not mounted");
+  }
 
   WiFi.mode(WIFI_AP);
   WiFi.softAP(AP_SSID, AP_PASS);
@@ -424,6 +581,8 @@ void setup() {
   server.on("/", HTTP_GET, handleRoot);
   server.on("/coords", HTTP_GET, handleCoords);
   server.on("/imu", HTTP_GET, handleImu);
+  server.on("/maps", HTTP_GET, handleMaps);
+  server.on("/tiles", HTTP_GET, handleTile);
   server.on("/display/test", HTTP_POST, handleDisplayTest);
   server.on("/imu/calibrate", HTTP_POST, handleCalibrate);
   server.on("/imu/reset", HTTP_POST, handleResetCalibration);
