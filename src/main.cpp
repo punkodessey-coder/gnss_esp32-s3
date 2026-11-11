@@ -38,6 +38,12 @@ const char* AP_PASS = "12345678";
 #define BLE_NOTIFY_UUID "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 #define BLE_COMMAND_UUID "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
+#define COLOR_BLACK 0x000000
+#define COLOR_WHITE 0xFFFFFF
+#define COLOR_RED 0xFF0000
+#define COLOR_GREEN 0x00FF00
+#define COLOR_BLUE 0x0000FF
+
 HardwareSerial gpsSerial(2);
 TinyGPSPlus gps;
 Arduino_DataBus *displayBus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD_MOSI);
@@ -466,23 +472,23 @@ void handleResetCalibration() {
 }
 
 void drawDisplayTest() {
-  gfx->fillScreen(BLACK);
-  gfx->setTextColor(WHITE);
+  gfx->fillScreen(COLOR_BLACK);
+  gfx->setTextColor(COLOR_WHITE);
   gfx->setTextSize(3);
   gfx->setCursor(25, 40);
   gfx->println("DISPLAY");
   gfx->println("TEST");
 
-  gfx->fillRect(10, 150, 152, 35, RED);
-  gfx->fillRect(10, 195, 152, 35, GREEN);
-  gfx->fillRect(10, 240, 152, 35, BLUE);
+  gfx->fillRect(10, 150, 152, 35, COLOR_RED);
+  gfx->fillRect(10, 195, 152, 35, COLOR_GREEN);
+  gfx->fillRect(10, 240, 152, 35, COLOR_BLUE);
 
   gfx->setTextSize(1);
   gfx->setCursor(10, 290);
   gfx->print("Seconds left: ");
   gfx->println((displayTestUntil - millis()) / 1000 + 1);
 
-  gfx->drawRect(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1, WHITE);
+  gfx->drawRect(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1, COLOR_WHITE);
 }
 
 void updateDisplay() {
@@ -491,8 +497,8 @@ void updateDisplay() {
     return;
   }
 
-  gfx->fillScreen(BLACK);
-  gfx->setTextColor(WHITE);
+  gfx->fillScreen(COLOR_BLACK);
+  gfx->setTextColor(COLOR_WHITE);
   gfx->setTextSize(2);
   gfx->setCursor(10, 20);
 
@@ -541,8 +547,8 @@ void setup() {
     Serial.println("ST7789 initialized");
   }
 
-  gfx->fillScreen(BLACK);
-  gfx->setTextColor(WHITE);
+  gfx->fillScreen(COLOR_BLACK);
+  gfx->setTextColor(COLOR_WHITE);
   gfx->setTextSize(2);
   gfx->setCursor(10, 30);
   gfx->println("ESP32-S3");
@@ -557,8 +563,8 @@ void setup() {
   gyroOffsetZ = preferences.getFloat("gz", 0);
 
   if (qmi.begin(Wire, QMI_ADDRESS, IMU_SDA, IMU_SCL)) {
-    qmi.configAccelerometer(SensorQMI8658::ACC_RANGE_4G, SensorQMI8658::ACC_ODR_250Hz, SensorQMI8658::LPF_MODE_0);
-    qmi.configGyroscope(SensorQMI8658::GYR_RANGE_256DPS, SensorQMI8658::GYR_ODR_250Hz, SensorQMI8658::LPF_MODE_3);
+    qmi.configAccelerometer(SensorQMI8658::ACC_RANGE_4G, SensorQMI8658::ACC_ODR_250HZ, SensorQMI8658::LPF_MODE_0);
+    qmi.configGyroscope(SensorQMI8658::GYR_RANGE_256DPS, SensorQMI8658::GYR_ODR_250HZ, SensorQMI8658::LPF_MODE_3);
     qmi.enableAccelerometer();
     qmi.enableGyroscope();
     imuReady = true;
