@@ -12,7 +12,6 @@
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
-#include <BLE2902.h>
 
 const char* AP_SSID = "ESP32-GPS";
 const char* AP_PASS = "12345678";
@@ -56,6 +55,10 @@ unsigned long displayTestUntil = 0;
 BLEServer* bleServer = nullptr;
 BLECharacteristic* bleNotify = nullptr;
 bool bleConnected = false;
+
+void startDisplayTest();
+void calibrateImuZero();
+void resetImuCalibration();
 
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer*) override {
@@ -435,7 +438,6 @@ void setup() {
     BLE_NOTIFY_UUID,
     BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
   );
-  bleNotify->addDescriptor(new BLE2902());
 
   BLECharacteristic* command = service->createCharacteristic(
     BLE_COMMAND_UUID,
