@@ -1,11 +1,9 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
-#include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
 #include <TinyGPSPlus.h>
 #include <ArduinoJson.h>
+#include <Arduino_GFX_Library.h>
 
 const char* AP_SSID = "ESP32-GPS";
 const char* AP_PASS = "12345678";
@@ -14,13 +12,19 @@ const char* AP_PASS = "12345678";
 #define GPS_TX_PIN 17
 #define GPS_BAUD 9600
 
-#define OLED_SDA 8
-#define OLED_SCL 9
-#define OLED_ADDR 0x3C
+#define LCD_MOSI 45
+#define LCD_SCLK 40
+#define LCD_CS 42
+#define LCD_DC 41
+#define LCD_RST 39
+#define LCD_BL 46
+#define LCD_WIDTH 172
+#define LCD_HEIGHT 320
 
 HardwareSerial gpsSerial(2);
 TinyGPSPlus gps;
-Adafruit_SSD1306 display(128, 64, &Wire, -1);
+Arduino_DataBus *displayBus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD_MOSI);
+Arduino_GFX *gfx = new Arduino_ST7789(displayBus, LCD_RST, 0, true, LCD_WIDTH, LCD_HEIGHT, 34, 0, 34, 0);
 WebServer server(80);
 
 bool haveFix = false;
@@ -75,7 +79,7 @@ button{padding:10px 14px;border:0;border-radius:8px;background:#2f81f7;color:#ff
 <div id="map"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const map=L.map('map').setView([55.7558,37.6173],12);
+const map=L.map('map').setView([59.9386,30.3141],11);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
 let marker=null;
 async function refresh(){
@@ -107,56 +111,56 @@ void handleCoords() {
 }
 
 void updateDisplay() {
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setCursor(0, 0);
+  gfx->fillScreen(BLACK);
+  gfx->setTextColor(WHITE);
+  gfx->setTextSize(2);
+  gfx->setCursor(10, 20);
 
   if (!haveFix) {
-    display.println("GPS: нет фикса");
-    display.println();
-    display.println("Wi-Fi:");
-    display.println(AP_SSID);
-    display.println(WiFi.softAPIP().toString());
-    display.display();
+    gfx->println("GPS:");
+    gfx->println("no fix");
+
+    gfx->setTextSize(1);
+    gfx->setCursor(10, 100);
+    gfx->println("Wi-Fi:");
+    gfx->println(AP_SSID);
+    gfx->println(WiFi.softAPIP().toString());
     return;
   }
 
-  display.print("SAT: ");
-  display.println(satellites);
-  display.print("HDOP: ");
-  display.println(hdop, 1);
+  gfx->setTextSize(2);
+  gfx->print("LAT\n");
+  gfx->println(lat, 6);
+  gfx->print("LON\n");
+  gfx->println(lng, 6);
 
-  display.setCursor(0, 26);
-  display.print("LAT ");
-  display.println(lat, 6);
-  display.print("LON ");
-  display.println(lng, 6);
-
-  display.setCursor(0, 54);
-  display.print("ALT ");
-  display.print(altitude, 0);
-  display.print(" m");
-
-  display.display();
+  gfx->setTextSize(1);
+  gfx->setCursor(10, 250);
+  gfx->print("SAT: ");
+  gfx->println(satellites);
+  gfx->print("ALT: ");
+  gfx->print(altitude, 0);
+  gfx->println(" m");
 }
 
 void setup() {
   Serial.begin(115200);
 
-  Wire.begin(OLED_SDA, OLED_SCL);
+  pinMode(LCD_BL, OUTPUT);
+  digitalWrite(LCD_BL, HIGH);
 
-  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
-    Serial.println("OLED SSD1306 not found");
+  if (!gfx->begin()) {
+    Serial.println("ST7789 initialization failed");
+  } else {
+    Serial.println("ST7789 initialized");
   }
 
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println("ESP32 GNSS");
-  display.println("Starting...");
-  display.display();
+  gfx->fillScreen(BLACK);
+  gfx->setTextColor(WHITE);
+  gfx->setTextSize(2);
+  gfx->setCursor(10, 30);
+  gfx->println("ESP32-S3");
+  gfx->println("Starting...");
 
   gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
 
