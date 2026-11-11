@@ -6,7 +6,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <Arduino_GFX_Library.h>
-#include <SensorQMI8658.hpp>
+#include <ImuDrv.hpp>
 #include <SD_MMC.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -30,7 +30,6 @@ const char* AP_PASS = "12345678";
 
 #define IMU_SDA 43
 #define IMU_SCL 44
-#define QMI_ADDRESS 0x6B
 
 #define SD_MOUNT "/sdcard"
 
@@ -38,17 +37,17 @@ const char* AP_PASS = "12345678";
 #define BLE_NOTIFY_UUID "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 #define BLE_COMMAND_UUID "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
-#define COLOR_BLACK 0x000000
-#define COLOR_WHITE 0xFFFFFF
-#define COLOR_RED 0xFF0000
-#define COLOR_GREEN 0x00FF00
-#define COLOR_BLUE 0x0000FF
+#define COLOR_BLACK 0x0000
+#define COLOR_WHITE 0xFFFF
+#define COLOR_RED 0xF800
+#define COLOR_GREEN 0x07E0
+#define COLOR_BLUE 0x001F
 
 HardwareSerial gpsSerial(2);
 TinyGPSPlus gps;
 Arduino_DataBus *displayBus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD_MOSI);
 Arduino_GFX *gfx = new Arduino_ST7789(displayBus, LCD_RST, 0, true, LCD_WIDTH, LCD_HEIGHT, 34, 0, 34, 0);
-SensorQMI8658 qmi;
+SensorQMI8658 imu;
 WebServer server(80);
 Preferences preferences;
 
@@ -114,15 +113,20 @@ void calibrateImuZero() {
   if (!imuReady) return;
 
   float sumX = 0, sumY = 0, sumZ = 0;
-  const int samples = 100;
+  int samples = 0;
+  const int targetSamples = 100;
 
-  for (int i = 0; i < samples; i++) {
-    float x, y, z;
-    if (qmi.getGyroscope(x, y, z)) {
-      sumX += x;
-      sumY += y;
-      sumZ += z;
+  while (samples < targetSamples) {
+    if (imu.isDataReady(static_cast<uint8_t>(ImuBase::DataReadyMask::GYRO))) {
+      GyroscopeData gyro;
+      imu.readGyro(gyro);
+
+      sumX += gyro.dps.x;
+      sumY += gyro.dps.y;
+      sumZ += gyro.dps.z;
+      samples++;
     }
+
     delay(5);
   }
 
@@ -151,20 +155,23 @@ void resetImuCalibration() {
 
 void readImu() {
   if (!imuReady) return;
-  if (!qmi.getDataReady()) return;
 
-  float x, y, z;
+  if (imu.isDataReady(static_cast<uint8_t>(ImuBase::DataReadyMask::ACCEL))) {
+    AccelerometerData accel;
+    imu.readAccel(accel);
 
-  if (qmi.getAccelerometer(x, y, z)) {
-    ax = x;
-    ay = y;
-    az = z;
+    ax = accel.mps2.x;
+    ay = accel.mps2.y;
+    az = accel.mps2.z;
   }
 
-  if (qmi.getGyroscope(x, y, z)) {
-    gx = x - gyroOffsetX;
-    gy = y - gyroOffsetY;
-    gz = z - gyroOffsetZ;
+  if (imu.isDataReady(static_cast<uint8_t>(ImuBase::DataReadyMask::GYRO))) {
+    GyroscopeData gyro;
+    imu.readGyro(gyro);
+
+    gx = gyro.dps.x - gyroOffsetX;
+    gy = gyro.dps.y - gyroOffsetY;
+    gz = gyro.dps.z - gyroOffsetZ;
   }
 }
 
@@ -353,7 +360,7 @@ try{
 const d=await (await fetch('/imu')).json();
 if(!d.ready){document.getElementById('imuStatus').textContent='QMI8658 не найден';document.getElementById('imuData').textContent='—';return;}
 document.getElementById('imuStatus').textContent=d.calibrated?'Калибровка нуля активна':'Калибровка не задана';
-document.getElementById('imuData').textContent='AX '+d.ax.toFixed(2)+' m/s2\nAY '+d.ay.toFixed(2)+' m/s2\nAZ '+d.az.toFixed(2)+' m/s2\n\nGX '+d.gx.toFixed(3)+' rad/s\nGY '+d.gy.toFixed(3)+' rad/s\nGZ '+d.gz.toFixed(3)+' rad/s';
+document.getElementById('imuData').textContent='AX '+d.ax.toFixed(2)+' m/s2\nAY '+d.ay.toFixed(2)+' m/s2\nAZ '+d.az.toFixed(2)+' m/s2\n\nGX '+d.gx.toFixed(3)+' deg/s\nGY '+d.gy.toFixed(3)+' deg/s\nGZ '+d.gz.toFixed(3)+' deg/s';
 }catch(e){}
 }
 
@@ -562,11 +569,11 @@ void setup() {
   gyroOffsetY = preferences.getFloat("gy", 0);
   gyroOffsetZ = preferences.getFloat("gz", 0);
 
-  if (qmi.begin(Wire, QMI_ADDRESS, IMU_SDA, IMU_SCL)) {
-    qmi.configAccelerometer(SensorQMI8658::ACC_RANGE_4G, SensorQMI8658::ACC_ODR_250HZ, SensorQMI8658::LPF_MODE_0);
-    qmi.configGyroscope(SensorQMI8658::GYR_RANGE_256DPS, SensorQMI8658::GYR_ODR_250HZ, SensorQMI8658::LPF_MODE_3);
-    qmi.enableAccelerometer();
-    qmi.enableGyroscope();
+  if (imu.begin(Wire, QMI8658_H_SLAVE_ADDRESS, IMU_SDA, IMU_SCL)) {
+    imu.configAccel(AccelFullScaleRange::FS_8G, 250.0f, SensorQMI8658::LpfMode::MODE_0);
+    imu.configGyro(GyroFullScaleRange::FS_1000_DPS, 250.0f, SensorQMI8658::LpfMode::MODE_0);
+    imu.enableAccel();
+    imu.enableGyro();
     imuReady = true;
     Serial.println("QMI8658 ready");
   } else {
@@ -652,7 +659,7 @@ void loop() {
   }
 
   static unsigned long lastImu = 0;
-  if (millis() - lastImu > 100) {
+  if (millis() - lastImu > 20) {
     lastImu = millis();
     readImu();
   }
