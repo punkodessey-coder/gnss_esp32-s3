@@ -1,0 +1,41 @@
+name: Build firmware
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO Core
+        run: pip install --upgrade platformio
+
+      - name: Build firmware
+        run: pio run
+
+      - name: Prepare firmware artifact
+        run: |
+          mkdir -p artifact
+          cp .pio/build/esp32s3/firmware.bin artifact/firmware.bin
+          if [ -f .pio/build/esp32s3/bootloader.bin ]; then cp .pio/build/esp32s3/bootloader.bin artifact/; fi
+          if [ -f .pio/build/esp32s3/partitions.bin ]; then cp .pio/build/esp32s3/partitions.bin artifact/; fi
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32-s3-firmware
+          path: artifact/
+          if-no-files-found: error
