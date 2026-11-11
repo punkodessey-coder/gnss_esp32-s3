@@ -21,6 +21,9 @@ const char* AP_PASS = "12345678";
 #define LCD_WIDTH 172
 #define LCD_HEIGHT 320
 
+#define COLOR_BLACK 0x000000
+#define COLOR_WHITE 0xFFFFFF
+
 HardwareSerial gpsSerial(2);
 TinyGPSPlus gps;
 Arduino_DataBus *displayBus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD_MOSI);
@@ -111,8 +114,8 @@ void handleCoords() {
 }
 
 void updateDisplay() {
-  gfx->fillScreen(BLACK);
-  gfx->setTextColor(WHITE);
+  gfx->fillScreen(COLOR_BLACK);
+  gfx->setTextColor(COLOR_WHITE);
   gfx->setTextSize(2);
   gfx->setCursor(10, 20);
 
@@ -155,8 +158,8 @@ void setup() {
     Serial.println("ST7789 initialized");
   }
 
-  gfx->fillScreen(BLACK);
-  gfx->setTextColor(WHITE);
+  gfx->fillScreen(COLOR_BLACK);
+  gfx->setTextColor(COLOR_WHITE);
   gfx->setTextSize(2);
   gfx->setCursor(10, 30);
   gfx->println("ESP32-S3");
