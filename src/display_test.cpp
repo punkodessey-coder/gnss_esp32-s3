@@ -10,6 +10,13 @@
 #define LCD_WIDTH 172
 #define LCD_HEIGHT 320
 
+// RGB565 colors required by Arduino_GFX
+#define BLACK  0x0000
+#define WHITE  0xFFFF
+#define RED    0xF800
+#define GREEN  0x07E0
+#define BLUE   0x001F
+
 Arduino_DataBus *bus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD_MOSI);
 Arduino_GFX *gfx = new Arduino_ST7789(bus, LCD_RST, 0, true, LCD_WIDTH, LCD_HEIGHT, 34, 0, 34, 0);
 
