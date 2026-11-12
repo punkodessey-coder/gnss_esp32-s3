@@ -6,8 +6,8 @@
 
 | GNSS-модуль | ESP32-S3 |
 |---|---|
-| TX | GPIO16 |
-| RX | GPIO17 |
+| TX | GPIO8 |
+| RX | GPIO9 |
 | VCC | 3.3V или 5V по документации модуля |
 | GND | GND |
 
