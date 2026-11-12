@@ -8,8 +8,8 @@
 const char* AP_SSID = "ESP32-GPS";
 const char* AP_PASS = "12345678";
 
-#define GPS_RX_PIN 16
-#define GPS_TX_PIN 17
+#define GPS_RX_PIN 8
+#define GPS_TX_PIN 9
 #define GPS_BAUD 9600
 
 #define LCD_MOSI 45
