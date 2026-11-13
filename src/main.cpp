@@ -10,7 +10,7 @@ const char* AP_PASS = "12345678";
 
 #define GPS_RX_PIN 8
 #define GPS_TX_PIN 9
-#define GPS_BAUD 9600
+#define GPS_BAUD 57600
 
 #define LCD_MOSI 45
 #define LCD_SCLK 40
@@ -27,7 +27,7 @@ const char* AP_PASS = "12345678";
 HardwareSerial gpsSerial(2);
 TinyGPSPlus gps;
 Arduino_DataBus *displayBus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD_MOSI);
-Arduino_GFX *gfx = new Arduino_ST7789(displayBus, LCD_RST, 0, true, LCD_WIDTH, LCD_HEIGHT, 34, 0, 34, 0);
+Arduino_GFX *gfx = new Arduino_ST7789(displayBus, LCD_RST, 1, true, LCD_WIDTH, LCD_HEIGHT, 34, 0, 34, 0);
 WebServer server(80);
 
 bool haveFix = false;
@@ -117,14 +117,14 @@ void updateDisplay() {
   gfx->fillScreen(COLOR_BLACK);
   gfx->setTextColor(COLOR_WHITE);
   gfx->setTextSize(2);
-  gfx->setCursor(10, 20);
+  gfx->setCursor(12, 12);
 
   if (!haveFix) {
     gfx->println("GPS:");
     gfx->println("no fix");
 
     gfx->setTextSize(1);
-    gfx->setCursor(10, 100);
+    gfx->setCursor(12, 80);
     gfx->println("Wi-Fi:");
     gfx->println(AP_SSID);
     gfx->println(WiFi.softAPIP().toString());
@@ -135,10 +135,10 @@ void updateDisplay() {
   gfx->print("LAT\n");
   gfx->println(lat, 6);
   gfx->print("LON\n");
-  gfx->println(lng, 6);
+  gfx->println(lng, 5);
 
   gfx->setTextSize(1);
-  gfx->setCursor(10, 250);
+  gfx->setCursor(12, 132);
   gfx->print("SAT: ");
   gfx->println(satellites);
   gfx->print("ALT: ");
