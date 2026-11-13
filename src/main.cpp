@@ -320,7 +320,7 @@ document.getElementById('tabGpsBtn').classList.toggle('active',name==='gps');
 document.getElementById('tabImuBtn').classList.toggle('active',name==='imu');
 }
 
-const map=L.map('map').setView([59.9386,30.3141],11);
+const map=L.map('map').setView([59.9386,30.3141],11);\nlet gpsMarker=null;
 
 async function loadMaps(){
   const select=document.getElementById('mapSelect');
@@ -368,7 +368,7 @@ const d=await (await fetch('/coords')).json();
 if(!d.valid){document.getElementById('status').textContent='Нет GPS-фикса';return;}
 const text=d.lat+', '+d.lng;
 document.getElementById('coords').textContent=text;
-document.getElementById('status').textContent='Спутников: '+d.sat+' | HDOP: '+d.hdop+' | обновлено '+Math.round(d.age_ms/1000)+' с назад';
+document.getElementById('status').textContent='Спутников: '+d.sat+' | HDOP: '+d.hdop+' | обновлено '+Math.round(d.age_ms/1000)+' с назад';\nif(!gpsMarker){gpsMarker=L.marker([d.lat,d.lng]).addTo(map);map.setView([d.lat,d.lng],16);}else{gpsMarker.setLatLng([d.lat,d.lng]);}
 }catch(e){}
 }
 
@@ -524,14 +524,14 @@ void updateDisplay() {
   gfx->fillScreen(COLOR_BLACK);
   gfx->setTextColor(COLOR_WHITE);
   gfx->setTextSize(2);
-  gfx->setCursor(10, 20);
+  gfx->setCursor(12, 12);
 
   if (!haveFix) {
     gfx->println("GPS:");
     gfx->println("no fix");
 
     gfx->setTextSize(1);
-    gfx->setCursor(10, 100);
+    gfx->setCursor(12, 80);
     gfx->println("Wi-Fi:");
     gfx->println(AP_SSID);
     gfx->println(WiFi.softAPIP().toString());
@@ -546,12 +546,12 @@ void updateDisplay() {
 
   gfx->setTextSize(2);
   gfx->print("LAT\n");
-  gfx->println(lat, 6);
+  gfx->println(lat, 5);
   gfx->print("LON\n");
-  gfx->println(lng, 6);
+  gfx->println(lng, 5);
 
   gfx->setTextSize(1);
-  gfx->setCursor(10, 250);
+  gfx->setCursor(12, 132);
   gfx->print("SAT: ");
   gfx->println(satellites);
   gfx->print("ALT: ");
