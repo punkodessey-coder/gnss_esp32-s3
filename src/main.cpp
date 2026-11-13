@@ -17,7 +17,7 @@ const char* AP_PASS = "12345678";
 
 #define GPS_RX_PIN 8
 #define GPS_TX_PIN 9
-#define GPS_BAUD 9600
+#define GPS_BAUD 57600
 
 #define LCD_MOSI 45
 #define LCD_SCLK 40
@@ -28,8 +28,8 @@ const char* AP_PASS = "12345678";
 #define LCD_WIDTH 172
 #define LCD_HEIGHT 320
 
-#define IMU_SDA 43
-#define IMU_SCL 44
+#define IMU_SDA 48
+#define IMU_SCL 47
 
 #define SD_MOUNT "/sdcard"
 
@@ -46,7 +46,7 @@ const char* AP_PASS = "12345678";
 HardwareSerial gpsSerial(2);
 TinyGPSPlus gps;
 Arduino_DataBus *displayBus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD_MOSI);
-Arduino_GFX *gfx = new Arduino_ST7789(displayBus, LCD_RST, 0, true, LCD_WIDTH, LCD_HEIGHT, 34, 0, 34, 0);
+Arduino_GFX *gfx = new Arduino_ST7789(displayBus, LCD_RST, 1, true, LCD_WIDTH, LCD_HEIGHT, 34, 0, 34, 0);
 SensorQMI8658 imu;
 WebServer server(80);
 Preferences preferences;
@@ -284,9 +284,15 @@ select{padding:8px;border-radius:6px;background:#222;color:#eee;border:1px solid
 </div>
 
 <div class="card">
-<h2>Офлайн-карта</h2>
-<div class="small">Выберите папку карты на microSD</div>
-<select id="mapSelect"><option value="">Загрузка…</option></select>
+<h2>Карта</h2>
+<div class="small">По умолчанию используется онлайн-карта. При наличии microSD можно выбрать сохранённую карту.</div>
+<select id="mapSelect">
+<option value="online:osm">OpenStreetMap — онлайн</option>
+<option value="online:esri">Esri Satellite — онлайн</option>
+<option value="online:topo">OpenTopoMap — онлайн</option>
+<option value="online:yandex">Яндекс Спутник — онлайн</option>
+</select>
+<div id="mapStatus" class="small">Загрузка списка офлайн-карт…</div>
 </div>
 
 <div id="map"></div>
@@ -317,34 +323,45 @@ document.getElementById('tabImuBtn').classList.toggle('active',name==='imu');
 const map=L.map('map').setView([59.9386,30.3141],11);
 
 async function loadMaps(){
-try{
-const d=await (await fetch('/maps')).json();
-const select=document.getElementById('mapSelect');
-select.innerHTML='';
-if(!d.maps || d.maps.length===0){
-select.innerHTML='<option value="">Карты на SD не найдены</option>';
-return;
+  const select=document.getElementById('mapSelect');
+  try{
+    const d=await (await fetch('/maps')).json();
+    if(d.maps && d.maps.length){
+      const group=document.createElement('optgroup');
+      group.label='Офлайн-карты microSD';
+      d.maps.forEach(name=>{
+        const option=document.createElement('option');
+        option.value='sd:'+name;
+        option.textContent=name;
+        group.appendChild(option);
+      });
+      select.appendChild(group);
+      document.getElementById('mapStatus').textContent='Найдено офлайн-карт: '+d.maps.length;
+    }else{
+      document.getElementById('mapStatus').textContent='На microSD нет карт в каталоге /maps';
+    }
+  }catch(e){
+    document.getElementById('mapStatus').textContent='microSD недоступна; онлайн-карты доступны при наличии интернета';
+  }
+  selectMap('online:osm');
 }
-d.maps.forEach(name=>{
-const option=document.createElement('option');
-option.value=name;
-option.textContent=name;
-select.appendChild(option);
-});
-select.value=d.maps[0];
-selectMap(d.maps[0]);
-}catch(e){
-document.getElementById('mapSelect').innerHTML='<option value="">SD не доступна</option>';
+function selectMap(value){
+  if(tileLayer){map.removeLayer(tileLayer);tileLayer=null;}
+  if(value==='online:osm'){
+    tileLayer=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'});
+  }else if(value==='online:esri'){
+    tileLayer=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Tiles &copy; Esri'});
+  }else if(value==='online:topo'){
+    tileLayer=L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',{maxZoom:17,attribution:'&copy; OpenTopoMap'});
+  }else if(value==='online:yandex'){
+    tileLayer=L.tileLayer('https://tiles.maps.yandex.net/tiles?l=sat&x={x}&y={y}&z={z}&scale=1&lang=ru_RU',{maxZoom:19,attribution:'&copy; Яндекс'});
+  }else if(value.startsWith('sd:')){
+    const name=value.substring(3);
+    tileLayer=L.tileLayer('/tiles?map='+encodeURIComponent(name)+'&z={z}&x={x}&y={y}',{maxZoom:19,minZoom:3,attribution:'Offline map'});
+  }
+  if(tileLayer)tileLayer.addTo(map);
+  document.getElementById('mapStatus').textContent=value.startsWith('sd:')?'Офлайн-карта: '+value.substring(3):'Онлайн-карта: '+value.substring(7).toUpperCase();
 }
-}
-
-function selectMap(name){
-currentMap=name;
-if(tileLayer){map.removeLayer(tileLayer);tileLayer=null;}
-if(!name)return;
-tileLayer=L.tileLayer('/tiles?map='+encodeURIComponent(name)+'&z={z}&x={x}&y={y}',{maxZoom:19,minZoom:3,attribution:'Offline map'}).addTo(map);
-}
-
 async function refreshGps(){
 try{
 const d=await (await fetch('/coords')).json();
@@ -582,6 +599,7 @@ void setup() {
 
   gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
 
+  SD_MMC.setPins(14, 15, 16, 18, 17, 21); // CLK, CMD, D0, D1, D2, D3
   if (SD_MMC.begin(SD_MOUNT, true)) {
     Serial.println("SD card mounted");
   } else {
