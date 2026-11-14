@@ -45,6 +45,8 @@ const char* AP_PASS = "12345678";
 
 HardwareSerial gpsSerial(2);
 HardwareSerial simulatorSerial(1); // NMEA test output: TX GPIO8, RX GPIO9 (unused)
+int gpsBaud = GPS_BAUD;
+String savedPointsJson = "[]";
 TinyGPSPlus gps;
 bool nmeaSimulatorEnabled = false;
 unsigned long lastSimulatorSentenceMs = 0;
@@ -188,7 +190,7 @@ void readImu() {
 
 String uartJson() {
   JsonDocument doc;
-  doc["baud"] = GPS_BAUD;
+  doc["baud"] = gpsBaud;
   doc["rx_pin"] = GPS_RX_PIN;
   doc["tx_pin"] = GPS_TX_PIN;
   doc["bytes_total"] = uartTotalBytes;
@@ -218,6 +220,12 @@ String coordsJson() {
   String out;
   serializeJson(doc, out);
   return out;
+}
+
+String savedPointsResponse() {
+  String value = preferences.getString("points", "[]");
+  if (value.length() == 0) value = "[]";
+  return value;
 }
 
 String imuJson() {
@@ -315,6 +323,8 @@ select{padding:8px;border-radius:6px;background:#222;color:#eee;border:1px solid
 <div class="metric"><span>Спутников видно</span><strong id="satValue">0</strong></div>
 <div class="coords" id="coords">0.000000, 0.000000</div>
 <button onclick="copyCoords()">Скопировать координаты</button>
+<button class="gray" onclick="saveCurrentPoint()">Сохранить текущую точку</button>
+<div class="card" style="margin-top:12px"><h3>Сохранённые точки</h3><div id="savedPointsList" class="small">Загрузка…</div></div>
 <button class="gray" onclick="testDisplay()">Тест экрана</button>
 <button class="gray" onclick="connectBle()">Подключить Bluetooth</button>
 <div class="card" style="margin-top:12px">
@@ -345,6 +355,10 @@ select{padding:8px;border-radius:6px;background:#222;color:#eee;border:1px solid
 <div id="uartTab" class="hidden">
 <div class="card"><h2>Монитор UART GPS</h2>
 <div id="uartStatus" class="small">Ожидание данных UART…</div>
+<label for="uartBaud">Скорость UART GPS</label>
+<select id="uartBaud" onchange="changeUartBaud(this.value)">
+<option>9600</option><option>19200</option><option>38400</option><option selected>57600</option><option>115200</option><option>230400</option>
+</select>
 <pre id="uartStats" class="coords">—</pre>
 <h3>Последняя строка NMEA</h3><pre id="uartLast" class="coords">—</pre>
 <h3>Последние строки NMEA</h3><pre id="uartRecent" class="coords">—</pre>
@@ -374,7 +388,7 @@ document.getElementById('tabUartBtn').classList.toggle('active',name==='uart');
 if(name==='gps' && map) setTimeout(()=>map.invalidateSize(),150);
 }
 
-let map=null, gpsMarker=null;
+let map=null, gpsMarker=null, currentFix=false;
 function initMap(){
   if(typeof L==='undefined'){document.getElementById('mapStatus').textContent='Leaflet не загрузилась — проверьте интернет и обновите страницу';return false;}
   if(!map){map=L.map('map').setView([59.9386,30.3141],11);}
@@ -422,6 +436,37 @@ function selectMap(value){
   if(tileLayer)tileLayer.addTo(map);
   document.getElementById('mapStatus').textContent=value.startsWith('sd:')?'Офлайн-карта: '+value.substring(3):'Онлайн-карта: '+value.substring(7).toUpperCase();
 }
+async function refreshSavedPoints(){
+ try{
+  const points=await (await fetch('/points')).json();
+  const list=document.getElementById('savedPointsList');
+  list.innerHTML='';
+  points.forEach(p=>{
+   const row=document.createElement('div'); row.className='point-row';
+   const title=document.createElement('strong'); title.textContent=p.name;
+   const coords=document.createElement('div'); coords.className='small'; coords.textContent=Number(p.lat).toFixed(6)+', '+Number(p.lng).toFixed(6);
+   const edit=document.createElement('button'); edit.className='gray'; edit.textContent='Переименовать'; edit.onclick=()=>editPoint(p.id,p.name);
+   const del=document.createElement('button'); del.className='gray'; del.textContent='Удалить'; del.onclick=()=>deletePoint(p.id);
+   row.append(title,coords,edit,del); list.appendChild(row);
+  });
+  if(!points.length) list.textContent='Сохранённых точек пока нет';
+ }catch(e){document.getElementById('savedPointsList').textContent='Ошибка загрузки точек';}
+}
+async function saveCurrentPoint(){
+ if(!currentFix){alert('Нет актуального GPS-фикса');return;}
+ const name=prompt('Название точки:','Новая точка'); if(!name||!name.trim())return;
+ const r=await fetch('/points/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name.trim()})});
+ if(r.ok)refreshSavedPoints();else alert('Не удалось сохранить точку');
+}
+async function editPoint(id,oldName){
+ const name=prompt('Новое название точки:',oldName); if(!name||!name.trim())return;
+ await fetch('/points/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,name:name.trim()})}); refreshSavedPoints();
+}
+async function deletePoint(id){
+ if(!confirm('Удалить сохранённую точку?'))return;
+ await fetch('/points/delete?id='+encodeURIComponent(id),{method:'POST'}); refreshSavedPoints();
+}
+
 async function refreshGps(){
 try{
 const d=await (await fetch('/coords')).json();
@@ -432,12 +477,22 @@ document.getElementById('latValue').textContent=lat.toFixed(6);
 document.getElementById('lngValue').textContent=lng.toFixed(6);
 document.getElementById('satValue').textContent=String(d.sat_visible??0);
 document.getElementById('coords').textContent=text;
-if(!d.valid){document.getElementById('status').textContent='Нет фикса — отображаются нулевые координаты';return;}
+currentFix=!!d.valid;
+if(!d.valid){
+ document.getElementById('status').textContent='Нет фикса — отображаются нулевые координаты';
+ if(gpsMarker && map){map.removeLayer(gpsMarker);gpsMarker=null;}
+ return;
+}
 document.getElementById('status').textContent='Видно: '+(d.sat_visible??0)+' | используется: '+d.sat+' | HDOP: '+d.hdop+' | обновлено '+Math.round(d.age_ms/1000)+' с назад';
 if(initMap()){if(!gpsMarker){gpsMarker=L.marker([d.lat,d.lng]).addTo(map);map.setView([d.lat,d.lng],16);}else{gpsMarker.setLatLng([d.lat,d.lng]);}}
 }catch(e){}
 }
 
+async function changeUartBaud(value){
+ const r=await fetch('/uart/baud?baud='+encodeURIComponent(value),{method:'POST'});
+ document.getElementById('uartStatus').textContent=r.ok?'Скорость UART изменена на '+value+' бод':'Не удалось изменить скорость UART';
+ refreshUart();
+}
 async function refreshUart(){
  const status=document.getElementById('uartStatus');
  try{
@@ -490,9 +545,16 @@ async function resetCalibration(){
 await fetch('/imu/reset',{method:'POST'});
 }
 
-function copyCoords(){
-const text=document.getElementById('coords').textContent;
-if(text!=='—')navigator.clipboard.writeText(text);
+async function copyCoords(){
+ const text=document.getElementById('coords').textContent.trim();
+ try{
+  if(navigator.clipboard && window.isSecureContext){await navigator.clipboard.writeText(text);}
+  else{
+   const field=document.createElement('textarea');field.value=text;field.style.position='fixed';field.style.opacity='0';document.body.appendChild(field);field.focus();field.select();
+   const ok=document.execCommand('copy');document.body.removeChild(field);if(!ok)throw new Error('copy command failed');
+  }
+  const button=document.querySelector('button[onclick="copyCoords()"]');if(button){const old=button.textContent;button.textContent='Скопировано';setTimeout(()=>button.textContent=old,1200);}
+ }catch(e){prompt('Скопируйте координаты:',text);}
 }
 
 async function connectBle(){
@@ -518,16 +580,77 @@ status.textContent='Bluetooth: '+e.message;
 }
 
 document.getElementById('mapSelect').addEventListener('change',e=>selectMap(e.target.value));
-setInterval(()=>{if(!document.getElementById('gpsTab').classList.contains('hidden'))refreshGps();},2000);
+setInterval(()=>{if(!document.getElementById('gpsTab').classList.contains('hidden'))refreshGps();},1000);
 setInterval(()=>{if(!document.getElementById('imuTab').classList.contains('hidden'))refreshImu();},200);
 setInterval(()=>{if(!document.getElementById('uartTab').classList.contains('hidden'))refreshUart();},500);
 refreshUart();
 loadMaps();
 refreshGps();
+refreshSavedPoints();
 </script>
 </body>
 </html>
 )HTML");
+}
+
+void handleSavedPoints() {
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", savedPointsResponse());
+}
+
+void handleSavePoint() {
+  JsonDocument input;
+  if (deserializeJson(input, server.arg("plain"))) { server.send(400, "text/plain", "Invalid JSON"); return; }
+  String name = input["name"] | "";
+  name.trim();
+  if (!name.length() || name.length() > 48 || !haveFix) { server.send(400, "text/plain", "Valid name and current fix required"); return; }
+  JsonDocument doc;
+  deserializeJson(doc, savedPointsResponse());
+  JsonArray points = doc.as<JsonArray>();
+  JsonObject item = points.add<JsonObject>();
+  item["id"] = String((uint32_t)esp_random(), HEX);
+  item["name"] = name;
+  item["lat"] = lat;
+  item["lng"] = lng;
+  String out; serializeJson(doc, out);
+  preferences.putString("points", out);
+  server.send(200, "application/json", out);
+}
+
+void handleUpdatePoint() {
+  JsonDocument input;
+  if (deserializeJson(input, server.arg("plain"))) { server.send(400, "text/plain", "Invalid JSON"); return; }
+  String id = input["id"] | "";
+  String name = input["name"] | "";
+  name.trim();
+  if (!id.length() || !name.length() || name.length() > 48) { server.send(400, "text/plain", "Invalid id/name"); return; }
+  JsonDocument doc;
+  deserializeJson(doc, savedPointsResponse());
+  for (JsonObject item : doc.as<JsonArray>()) if (String((const char*)item["id"]) == id) item["name"] = name;
+  String out; serializeJson(doc, out); preferences.putString("points", out);
+  server.send(200, "application/json", out);
+}
+
+void handleDeletePoint() {
+  String id = server.arg("id");
+  JsonDocument source, target;
+  deserializeJson(source, savedPointsResponse());
+  JsonArray result = target.to<JsonArray>();
+  for (JsonObject item : source.as<JsonArray>()) if (String((const char*)item["id"]) != id) result.add(item);
+  String out; serializeJson(target, out); preferences.putString("points", out);
+  server.send(200, "application/json", out);
+}
+
+void handleSetBaud() {
+  int baud = server.arg("baud").toInt();
+  const int allowed[] = {9600, 19200, 38400, 57600, 115200, 230400};
+  bool ok = false;
+  for (int value : allowed) if (value == baud) ok = true;
+  if (!ok) { server.send(400, "application/json", "{\"ok\":false,\"error\":\"Unsupported baud\"}"); return; }
+  gpsSerial.updateBaudRate(baud);
+  gpsBaud = baud;
+  simulatorSerial.updateBaudRate(baud);
+  server.send(200, "application/json", "{\"ok\":true}");
 }
 
 void handleCoords() {
@@ -673,14 +796,23 @@ void setup() {
   gfx->println("Starting...");
 
   Wire.begin(IMU_SDA, IMU_SCL);
-  Wire.setClock(400000);
+  Wire.setClock(100000);
 
   preferences.begin("imu", false);
+  if (!preferences.isKey("points")) preferences.putString("points", "[]");
   gyroOffsetX = preferences.getFloat("gx", 0);
   gyroOffsetY = preferences.getFloat("gy", 0);
   gyroOffsetZ = preferences.getFloat("gz", 0);
 
-  if (imu.begin(Wire, QMI8658_H_SLAVE_ADDRESS, IMU_SDA, IMU_SCL)) {
+  uint8_t imuAddress = 0;
+  for (uint8_t address = 0x08; address < 0x78; address++) {
+    Wire.beginTransmission(address);
+    if (Wire.endTransmission() == 0) {
+      Serial.printf("I2C device found at 0x%02X\\n", address);
+      if (address == 0x6A || address == 0x6B) imuAddress = address;
+    }
+  }
+  if (imuAddress && imu.begin(Wire, imuAddress, IMU_SDA, IMU_SCL)) {
     imu.configAccel(AccelFullScaleRange::FS_8G, 250.0f, SensorQMI8658::LpfMode::MODE_0);
     imu.configGyro(GyroFullScaleRange::FS_1000_DPS, 250.0f, SensorQMI8658::LpfMode::MODE_0);
     imu.enableAccel();
@@ -691,8 +823,8 @@ void setup() {
     Serial.println("QMI8658 not found");
   }
 
-  gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
-  simulatorSerial.begin(GPS_BAUD, SERIAL_8N1, 9, 8);
+  gpsSerial.begin(gpsBaud, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
+  simulatorSerial.begin(gpsBaud, SERIAL_8N1, 9, 8);
   Serial.println("NMEA simulator UART1 ready: TX GPIO8, RX GPIO9, 57600 baud");
 
   SD_MMC.setPins(14, 15, 16, 18, 17, 21); // CLK, CMD, D0, D1, D2, D3
@@ -707,6 +839,11 @@ void setup() {
 
   server.on("/", HTTP_GET, handleRoot);
   server.on("/coords", HTTP_GET, handleCoords);
+  server.on("/points", HTTP_GET, handleSavedPoints);
+  server.on("/points/save", HTTP_POST, handleSavePoint);
+  server.on("/points/update", HTTP_POST, handleUpdatePoint);
+  server.on("/points/delete", HTTP_POST, handleDeletePoint);
+  server.on("/uart/baud", HTTP_POST, handleSetBaud);
   server.on("/imu", HTTP_GET, handleImu);
   server.on("/uart", HTTP_GET, handleUart);
   server.on("/maps", HTTP_GET, handleMaps);
@@ -771,6 +908,12 @@ void sendNmeaSimulatorFrame() {
 
 void loop() {
   server.handleClient();
+
+  if (haveFix && millis() - lastFixMs > 7000) {
+    haveFix = false;
+    lat = 0.0; lng = 0.0; altitude = 0.0;
+    satellites = 0; satellitesVisible = 0; hdop = 0.0;
+  }
 
   if (nmeaSimulatorEnabled && millis() - lastSimulatorSentenceMs >= 1000) {
     lastSimulatorSentenceMs = millis();
