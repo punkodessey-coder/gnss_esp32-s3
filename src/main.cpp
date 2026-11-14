@@ -353,7 +353,7 @@ document.getElementById('tabUartBtn').classList.toggle('active',name==='uart');
 if(name==='gps' && map) setTimeout(()=>map.invalidateSize(),150);
 }
 
-let map=null, gpsMarker=null, tileLayer=null;
+let map=null, gpsMarker=null;
 function initMap(){
   if(typeof L==='undefined'){document.getElementById('mapStatus').textContent='Leaflet не загрузилась — проверьте интернет и обновите страницу';return false;}
   if(!map){map=L.map('map').setView([59.9386,30.3141],11);}
@@ -407,7 +407,8 @@ const d=await (await fetch('/coords')).json();
 if(!d.valid){document.getElementById('status').textContent='Нет GPS-фикса — проверяйте вкладку UART: приём NMEA может идти без координат';document.getElementById('coords').textContent='Координаты пока недоступны';return;}
 const text=d.lat+', '+d.lng;
 document.getElementById('coords').textContent=text;
-document.getElementById('status').textContent='Спутников: '+d.sat+' | HDOP: '+d.hdop+' | обновлено '+Math.round(d.age_ms/1000)+' с назад';\nif(initMap()){if(!gpsMarker){gpsMarker=L.marker([d.lat,d.lng]).addTo(map);map.setView([d.lat,d.lng],16);}else{gpsMarker.setLatLng([d.lat,d.lng]);}}
+document.getElementById('status').textContent='Спутников: '+d.sat+' | HDOP: '+d.hdop+' | обновлено '+Math.round(d.age_ms/1000)+' с назад';
+if(initMap()){if(!gpsMarker){gpsMarker=L.marker([d.lat,d.lng]).addTo(map);map.setView([d.lat,d.lng],16);}else{gpsMarker.setLatLng([d.lat,d.lng]);}}
 }catch(e){}
 }
 
@@ -416,7 +417,7 @@ try{
  const d=await (await fetch('/uart',{cache:'no-store'})).json();
  const age=d.last_byte_age_ms<0?'байтов ещё не было':(d.last_byte_age_ms<1500?'приём идёт':'последний байт '+(d.last_byte_age_ms/1000).toFixed(1)+' с назад');
  document.getElementById('uartStatus').textContent=age+' | '+d.baud+' бод | RX GPIO'+d.rx_pin+' / TX GPIO'+d.tx_pin;
- document.getElementById('uartStats').textContent='Всего байтов: '+d.bytes_total+'\\nСкорость: '+d.bytes_per_second+' байт/с\\nChecksum OK: '+d.checksum_passed+'\\nОшибок checksum: '+d.checksum_failed+'\\nОбработано символов: '+d.chars_processed+'\\nОшибок/переполнений строк: '+d.invalid_sentences;
+ document.getElementById('uartStats').textContent='Всего байтов: '+d.bytes_total+'\nСкорость: '+d.bytes_per_second+' байт/с\nChecksum OK: '+d.checksum_passed+'\nОшибок checksum: '+d.checksum_failed+'\nОбработано символов: '+d.chars_processed+'\nОшибок/переполнений строк: '+d.invalid_sentences;
  document.getElementById('uartLast').textContent=d.last_sentence||'Полная строка NMEA ещё не получена';
  document.getElementById('uartRecent').textContent=d.recent||'—';
 }catch(e){document.getElementById('uartStatus').textContent='Ошибка UART API: '+e.message;}
