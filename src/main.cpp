@@ -278,13 +278,6 @@ String savedPointsResponse() {
 String imuJson() {
   JsonDocument doc;
   doc["ready"] = imuReady;
-  doc["chip_id"] = imuReady ? imu.getChipID() : 0;
-  doc["firmware_version"] = imuReady ? imu.getFirmwareVersion() : 0;
-  doc["temperature_c"] = imuReady ? imu.getTemperature() : NAN;
-  doc["sensor_timestamp"] = imuReady ? imu.getTimestamp() : 0;
-  doc["accel_enabled"] = imuReady && imu.isAccelEnabled();
-  doc["gyro_enabled"] = imuReady && imu.isGyroEnabled();
-  doc["interrupt_status"] = imuReady ? imu.getInterruptStatus() : 0;
   doc["ax"] = ax; doc["ay"] = ay; doc["az"] = az;
   doc["gx"] = gx; doc["gy"] = gy; doc["gz"] = gz;
   doc["accel_magnitude"] = sqrtf(ax*ax + ay*ay + az*az);
@@ -294,7 +287,10 @@ String imuJson() {
   doc["gyro_offset_x"] = gyroOffsetX; doc["gyro_offset_y"] = gyroOffsetY; doc["gyro_offset_z"] = gyroOffsetZ;
   doc["calibrated"] = gyroOffsetX != 0 || gyroOffsetY != 0 || gyroOffsetZ != 0;
   doc["sample_period_ms"] = 20;
-  doc["i2c_address"] = 0x6A; 
+  doc["i2c_address"] = 0x6A;
+  doc["accel_range_g"] = 8;
+  doc["gyro_range_dps"] = 1000;
+  doc["sample_rate_hz"] = 250;
   String out; serializeJson(doc, out); return out;
 }
 
@@ -670,7 +666,7 @@ if(!d.ready){document.getElementById('imuStatus').textContent='QMI8658 не на
 document.getElementById('imuStatus').textContent='Датчик доступен | ACC: '+(d.accel_enabled?'ON':'OFF')+' | GYRO: '+(d.gyro_enabled?'ON':'OFF')+' | I2C 0x'+Number(d.i2c_address).toString(16).toUpperCase();
 const f=(v,n=3)=>Number(v).toFixed(n);
 document.getElementById('imuData').textContent=
-'ИДЕНТИФИКАЦИЯ\nChip ID: 0x'+Number(d.chip_id).toString(16).toUpperCase()+' | Firmware: '+d.firmware_version+'\nТемпература датчика: '+f(d.temperature_c,2)+' °C\nВнутренний timestamp: '+d.sensor_timestamp+'\nСтатус прерываний: 0x'+Number(d.interrupt_status).toString(16).toUpperCase()+
+'КОНФИГУРАЦИЯ\nI2C address: 0x'+Number(d.i2c_address).toString(16).toUpperCase()+'\nАкселерометр: ±'+d.accel_range_g+' g | Гироскоп: ±'+d.gyro_range_dps+' °/s\nЧастота настройки датчиков: '+d.sample_rate_hz+' Hz | Опрос: '+d.sample_period_ms+' ms'+
 '\n\nАКСЕЛЕРОМЕТР (m/s²)\nX: '+f(d.ax)+' | Y: '+f(d.ay)+' | Z: '+f(d.az)+'\nМодуль ускорения: '+f(d.accel_magnitude)+' m/s²'+
 '\n\nГИРОСКОП (°/s)\nX: '+f(d.gx)+' | Y: '+f(d.gy)+' | Z: '+f(d.gz)+'\nМодуль угловой скорости: '+f(d.gyro_magnitude)+' °/s'+
 '\n\nРАСЧЁТНАЯ ОРИЕНТАЦИЯ\nRoll: '+f(d.roll_deg,2)+'° | Pitch: '+f(d.pitch_deg,2)+'°\nYaw: недоступен без магнитометра/внешней привязки'+
