@@ -55,7 +55,8 @@ bool haveFix = false;
 double lat = 0.0;
 double lng = 0.0;
 double altitude = 0.0;
-int satellites = 0;
+int satellites = 0; // satellites used in fix
+int satellitesVisible = 0; // satellites in view from GSV, even without fix
 double hdop = 0.0;
 unsigned long lastFixMs = 0;
 unsigned long uartLastByteMs = 0, uartWindowStartMs = 0, uartBytesWindow = 0;
@@ -204,6 +205,7 @@ String coordsJson() {
   doc["lng"] = serialized(String(lng, 7));
   doc["alt"] = altitude;
   doc["sat"] = satellites;
+  doc["sat_visible"] = satellitesVisible;
   doc["hdop"] = hdop;
   doc["age_ms"] = haveFix ? (long)(millis() - lastFixMs) : -1;
 
@@ -278,7 +280,10 @@ body{margin:0;padding:12px;background:#111;color:#eee;font-family:system-ui,sans
 .tabs{display:flex;gap:8px;margin-bottom:12px}
 .tab{padding:10px 16px;border-radius:8px;background:#333;color:#eee;border:0;font-size:15px}
 .tab.active{background:#2f81f7;color:#fff}
-.card{background:#1c1c1c;border-radius:12px;padding:14px;margin-bottom:12px}
+.card{background:#1c1c1c;border-radius:14px;padding:16px;margin-bottom:12px}
+.metric{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #333;color:#aaa}
+.metric strong{color:#fff;font:600 18px ui-monospace,monospace}
+.gps-card .coords{margin-top:14px;color:#8ab4ff}
 .coords,.imu{font-family:monospace;font-size:17px;word-break:break-all;white-space:pre-wrap}
 button{padding:10px 14px;border:0;border-radius:8px;background:#2f81f7;color:#fff;font-size:15px;margin:4px 4px 0 0}
 button.gray{background:#555}
@@ -296,10 +301,13 @@ select{padding:8px;border-radius:6px;background:#222;color:#eee;border:1px solid
 </div>
 
 <div id="gpsTab">
-<div class="card">
-<h2>Координаты ESP32</h2>
+<div class="card gps-card">
+<h2>GNSS — текущее положение</h2>
 <div id="status" class="small">Ожидание данных…</div>
-<div id="coords" class="coords">—</div>
+<div class="metric"><span>Широта</span><strong id="latValue">0.000000</strong></div>
+<div class="metric"><span>Долгота</span><strong id="lngValue">0.000000</strong></div>
+<div class="metric"><span>Спутников видно</span><strong id="satValue">0</strong></div>
+<div class="coords" id="coords">0.000000, 0.000000</div>
 <button onclick="copyCoords()">Скопировать координаты</button>
 <button class="gray" onclick="testDisplay()">Тест экрана</button>
 <button class="gray" onclick="connectBle()">Подключить Bluetooth</button>
@@ -404,10 +412,15 @@ function selectMap(value){
 async function refreshGps(){
 try{
 const d=await (await fetch('/coords')).json();
-if(!d.valid){document.getElementById('status').textContent='Нет GPS-фикса — проверяйте вкладку UART: приём NMEA может идти без координат';document.getElementById('coords').textContent='Координаты пока недоступны';return;}
-const text=d.lat+', '+d.lng;
+const lat=d.valid?Number(d.lat):0;
+const lng=d.valid?Number(d.lng):0;
+const text=lat.toFixed(6)+', '+lng.toFixed(6);
+document.getElementById('latValue').textContent=lat.toFixed(6);
+document.getElementById('lngValue').textContent=lng.toFixed(6);
+document.getElementById('satValue').textContent=String(d.sat_visible??0);
 document.getElementById('coords').textContent=text;
-document.getElementById('status').textContent='Спутников: '+d.sat+' | HDOP: '+d.hdop+' | обновлено '+Math.round(d.age_ms/1000)+' с назад';
+if(!d.valid){document.getElementById('status').textContent='Нет фикса — отображаются нулевые координаты';return;}
+document.getElementById('status').textContent='Видно: '+(d.sat_visible??0)+' | используется: '+d.sat+' | HDOP: '+d.hdop+' | обновлено '+Math.round(d.age_ms/1000)+' с назад';
 if(initMap()){if(!gpsMarker){gpsMarker=L.marker([d.lat,d.lng]).addTo(map);map.setView([d.lat,d.lng],16);}else{gpsMarker.setLatLng([d.lat,d.lng]);}}
 }catch(e){}
 }
@@ -580,49 +593,23 @@ void drawDisplayTest() {
 }
 
 void updateDisplay() {
-  if (displayTestActive) {
-    drawDisplayTest();
-    return;
-  }
-
+  if (displayTestActive) { drawDisplayTest(); return; }
   gfx->fillScreen(COLOR_BLACK);
   gfx->setTextColor(COLOR_WHITE);
-  gfx->setTextSize(2);
-  gfx->setCursor(12, 12);
-
-  if (!haveFix) {
-    gfx->println("GPS:");
-    gfx->println("no fix");
-
-    gfx->setTextSize(1);
-    gfx->setCursor(12, 80);
-    gfx->println("Wi-Fi:");
-    gfx->println(AP_SSID);
-    gfx->println(WiFi.softAPIP().toString());
-    gfx->println();
-    gfx->print("BLE: ");
-    gfx->println(bleConnected ? "ON" : "OFF");
-    gfx->println();
-    gfx->print("IMU: ");
-    gfx->println(imuReady ? "OK" : "NOT FOUND");
-    return;
-  }
-
-  gfx->setTextSize(2);
-  gfx->print("LAT\n");
-  gfx->println(lat, 5);
-  gfx->print("LON\n");
-  gfx->println(lng, 5);
-
-  gfx->setTextSize(1);
-  gfx->setCursor(12, 132);
-  gfx->print("SAT: ");
-  gfx->println(satellites);
-  gfx->print("ALT: ");
-  gfx->print(altitude, 0);
-  gfx->println(" m");
+  gfx->setTextSize(2); gfx->setCursor(10, 8); gfx->println("GPS");
+  gfx->setTextSize(1); gfx->setCursor(10, 38);
+  gfx->print("STATUS: "); gfx->println(haveFix ? "FIX OK" : "NO FIX");
+  gfx->setTextSize(2); gfx->setCursor(10, 62); gfx->println("LAT");
+  gfx->setTextSize(1); gfx->setCursor(10, 86); gfx->println(haveFix ? String(lat, 6) : String("0.000000"));
+  gfx->setTextSize(2); gfx->setCursor(10, 112); gfx->println("LON");
+  gfx->setTextSize(1); gfx->setCursor(10, 136); gfx->println(haveFix ? String(lng, 6) : String("0.000000"));
+  gfx->setTextSize(2); gfx->setCursor(10, 166); gfx->print("SAT: "); gfx->println(satellitesVisible);
+  gfx->setTextSize(1); gfx->setCursor(10, 198);
+  gfx->print("USED: "); gfx->println(satellites);
+  gfx->print("ALT: "); gfx->print(altitude, 0); gfx->println(" m");
+  gfx->println(); gfx->print("BLE: "); gfx->println(bleConnected ? "ON" : "OFF");
+  gfx->print("IMU: "); gfx->println(imuReady ? "OK" : "NOT FOUND");
 }
-
 void setup() {
   Serial.begin(115200);
 
@@ -727,7 +714,14 @@ void loop() {
       uartCurrentLine.trim();
       if (uartCurrentLine.length()) {
         uartLastLine = uartCurrentLine;
-        uartRecentLines += uartCurrentLine + "\\n";
+        if (uartCurrentLine.startsWith("$") && uartCurrentLine.indexOf("GSV,") > 0) {
+          int c1 = uartCurrentLine.indexOf(',');
+          int c2 = uartCurrentLine.indexOf(',', c1 + 1);
+          int c3 = c2 >= 0 ? uartCurrentLine.indexOf(',', c2 + 1) : -1;
+          int c4 = c3 >= 0 ? uartCurrentLine.indexOf(',', c3 + 1) : -1;
+          if (c4 > c3) satellitesVisible = uartCurrentLine.substring(c3 + 1, c4).toInt();
+        }
+        uartRecentLines += uartCurrentLine + "\n";
         if (uartRecentLines.length() > 1200) uartRecentLines.remove(0, uartRecentLines.length()-1200);
       }
       uartCurrentLine = ""; uartLineOverflow = false;
