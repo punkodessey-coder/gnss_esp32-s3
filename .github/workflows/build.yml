@@ -1,4 +1,4 @@
-name: Build firmware
+name: Build firmware # includes GNSS configuration-manager feature branch
 
 on:
   push:
