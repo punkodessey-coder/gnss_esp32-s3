@@ -360,6 +360,7 @@ select{padding:8px;border-radius:6px;background:#222;color:#eee;border:1px solid
 <button id="tabImuBtn" class="tab" onclick="showTab('imu')">IMU</button>
 <button id="tabUartBtn" class="tab" onclick="showTab('uart')">UART</button>
 <button id="tabUbxBtn" class="tab" onclick="showTab('ubx')">u-blox</button>
+<button id="tabPointsBtn" class="tab" onclick="showTab('points')">Точки</button>
 </div>
 
 <div id="gpsTab">
@@ -372,7 +373,7 @@ select{padding:8px;border-radius:6px;background:#222;color:#eee;border:1px solid
 <div class="coords" id="coords">0.000000, 0.000000</div>
 <button onclick="copyCoords()">Скопировать координаты</button>
 <button class="gray" onclick="saveCurrentPoint()">Сохранить текущую точку</button>
-<div class="card" style="margin-top:12px"><h3>Сохранённые точки</h3><div id="savedPointsList" class="small">Загрузка…</div></div>
+
 <button class="gray" onclick="testDisplay()">Тест экрана</button>
 <button class="gray" onclick="connectBle()">Подключить Bluetooth</button>
 <div class="card" style="margin-top:12px">
@@ -422,6 +423,7 @@ select{padding:8px;border-radius:6px;background:#222;color:#eee;border:1px solid
 <button onclick="pollUbx()">Poll</button><button class="gray" onclick="sendUbxConfig()">Send / запись</button>
 <div id="ubxStatus" class="small">Ожидание</div><h3>Последний ответ</h3><pre id="ubxFrame" class="coords">—</pre>
 </div></div>
+<div id="pointsTab" class="hidden"><div class="card"><h2>Сохранённые точки</h2><div class="small">Название и координаты сохранённых местоположений</div><div id="savedPointsList" class="small">Загрузка…</div></div></div>
 <div id="imuTab" class="hidden">
 <div class="card">
 <h2>Акселерометр и гироскоп</h2>
@@ -442,10 +444,12 @@ document.getElementById('gpsTab').classList.toggle('hidden',name!=='gps');
 document.getElementById('imuTab').classList.toggle('hidden',name!=='imu');
 document.getElementById('uartTab').classList.toggle('hidden',name!=='uart');
 document.getElementById('ubxTab').classList.toggle('hidden',name!=='ubx');
+document.getElementById('pointsTab').classList.toggle('hidden',name!=='points');
 document.getElementById('tabGpsBtn').classList.toggle('active',name==='gps');
 document.getElementById('tabImuBtn').classList.toggle('active',name==='imu');
 document.getElementById('tabUartBtn').classList.toggle('active',name==='uart');
 document.getElementById('tabUbxBtn').classList.toggle('active',name==='ubx');
+document.getElementById('tabPointsBtn').classList.toggle('active',name==='points');
 if(name==='gps' && map) setTimeout(()=>map.invalidateSize(),150);
 }
 
@@ -901,7 +905,7 @@ void setup() {
   for (uint8_t address = 0x08; address < 0x78; address++) {
     Wire.beginTransmission(address);
     if (Wire.endTransmission() == 0) {
-      Serial.printf("I2C device found at 0x%02X\\n", address);
+      Serial.printf("I2C device found at 0x%02X\n", address);
       if (address == 0x6A || address == 0x6B) imuAddress = address;
     }
   }
