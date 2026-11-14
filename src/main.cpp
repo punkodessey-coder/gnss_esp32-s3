@@ -811,9 +811,8 @@ void handleSimulatorStart() {
 
 void handleSimulatorStop() {
   nmeaSimulatorEnabled = false;
-  haveFix = false;
-  lat = 0.0; lng = 0.0; altitude = 0.0;
-  satellites = 0; satellitesVisible = 0; hdop = 0.0;
+  // Keep the last marker briefly; the stale-fix timeout clears it after 7 seconds.
+  if (haveFix) lastFixMs = millis();
   server.send(200, "application/json", "{\"ok\":true,\"enabled\":false}");
 }
 
