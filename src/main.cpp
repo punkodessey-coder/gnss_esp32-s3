@@ -34,7 +34,8 @@ bool haveFix = false;
 double lat = 0.0;
 double lng = 0.0;
 double altitude = 0.0;
-int satellites = 0;
+int satellites = 0; // satellites used in fix
+int satellitesVisible = 0; // satellites in view from GSV, even without fix
 double hdop = 0.0;
 unsigned long lastFixMs = 0;
 
@@ -45,6 +46,7 @@ String coordsJson() {
   doc["lng"] = serialized(String(lng, 7));
   doc["alt"] = altitude;
   doc["sat"] = satellites;
+  doc["sat_visible"] = satellitesVisible;
   doc["hdop"] = hdop;
   doc["age_ms"] = haveFix ? (long)(millis() - lastFixMs) : -1;
 
@@ -117,35 +119,22 @@ void updateDisplay() {
   gfx->fillScreen(COLOR_BLACK);
   gfx->setTextColor(COLOR_WHITE);
   gfx->setTextSize(2);
-  gfx->setCursor(12, 12);
-
-  if (!haveFix) {
-    gfx->println("GPS:");
-    gfx->println("no fix");
-
-    gfx->setTextSize(1);
-    gfx->setCursor(12, 80);
-    gfx->println("Wi-Fi:");
-    gfx->println(AP_SSID);
-    gfx->println(WiFi.softAPIP().toString());
-    return;
-  }
-
-  gfx->setTextSize(2);
-  gfx->print("LAT\n");
-  gfx->println(lat, 6);
-  gfx->print("LON\n");
-  gfx->println(lng, 5);
-
+  gfx->setCursor(10, 10);
+  gfx->println("GPS");
   gfx->setTextSize(1);
-  gfx->setCursor(12, 132);
-  gfx->print("SAT: ");
-  gfx->println(satellites);
-  gfx->print("ALT: ");
-  gfx->print(altitude, 0);
-  gfx->println(" m");
+  gfx->setCursor(10, 42);
+  gfx->print("STATUS: "); gfx->println(haveFix ? "FIX OK" : "NO FIX");
+  gfx->setTextSize(2); gfx->setCursor(10, 68); gfx->println("LAT");
+  gfx->setTextSize(1); gfx->setCursor(10, 92); gfx->println(haveFix ? String(lat, 6) : String("0.000000"));
+  gfx->setTextSize(2); gfx->setCursor(10, 120); gfx->println("LON");
+  gfx->setTextSize(1); gfx->setCursor(10, 144); gfx->println(haveFix ? String(lng, 6) : String("0.000000"));
+  gfx->setTextSize(2); gfx->setCursor(10, 176); gfx->print("SAT: "); gfx->println(satellitesVisible);
+  gfx->setTextSize(1); gfx->setCursor(10, 210);
+  gfx->print("USED: "); gfx->println(satellites);
+  gfx->print("ALT: "); gfx->print(altitude, 0); gfx->println(" m");
+  gfx->println(); gfx->print("Wi-Fi: "); gfx->println(AP_SSID);
+  gfx->println(WiFi.softAPIP().toString());
 }
-
 void setup() {
   Serial.begin(115200);
 
@@ -186,6 +175,19 @@ void loop() {
 
   while (gpsSerial.available()) {
     char c = gpsSerial.read();
+    static String nmeaLine;
+    if (c == '\n') {
+      nmeaLine.trim();
+      if (nmeaLine.startsWith("$") && nmeaLine.indexOf("GSV,") > 0) {
+        int c1 = nmeaLine.indexOf(',');
+        int c2 = nmeaLine.indexOf(',', c1 + 1);
+        int c3 = c2 >= 0 ? nmeaLine.indexOf(',', c2 + 1) : -1;
+        int c4 = c3 >= 0 ? nmeaLine.indexOf(',', c3 + 1) : -1;
+        if (c4 > c3) satellitesVisible = nmeaLine.substring(c3 + 1, c4).toInt();
+      }
+      nmeaLine = "";
+    } else if (c != '\r' && nmeaLine.length() < 160) nmeaLine += c;
+    else if (nmeaLine.length() >= 160) nmeaLine = "";
 
     if (gps.encode(c)) {
       if (gps.location.isValid() && gps.location.isUpdated()) {
