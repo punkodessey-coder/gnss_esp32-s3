@@ -359,6 +359,7 @@ select{padding:8px;border-radius:6px;background:#222;color:#eee;border:1px solid
 <button id="tabGpsBtn" class="tab active" onclick="showTab('gps')">GPS</button>
 <button id="tabImuBtn" class="tab" onclick="showTab('imu')">IMU</button>
 <button id="tabUartBtn" class="tab" onclick="showTab('uart')">UART</button>
+<button id="tabUbxBtn" class="tab" onclick="showTab('ubx')">u-blox</button>
 </div>
 
 <div id="gpsTab">
@@ -410,6 +411,17 @@ select{padding:8px;border-radius:6px;background:#222;color:#eee;border:1px solid
 <h3>Последняя строка NMEA</h3><pre id="uartLast" class="coords">—</pre>
 <h3>Последние строки NMEA</h3><pre id="uartRecent" class="coords">—</pre>
 </div></div>
+<div id="ubxTab" class="hidden"><div class="card">
+<h2>u-blox — Configuration View</h2>
+<div class="small">UBX CFG: MSG, NAV5, PRT, RATE, TP5. Poll запрашивает параметры, Send отправляет payload. Payload вводится в HEX по документации конкретной модели u-blox.</div>
+<label>Раздел</label><select id="ubxPreset" onchange="selectUbxPreset(this.value)">
+<option value="msg">CFG-MSG (06 01)</option><option value="nav5">CFG-NAV5 (06 24)</option><option value="prt">CFG-PRT (06 00)</option><option value="rate">CFG-RATE (06 08)</option><option value="tp5">CFG-TP5 (06 31)</option></select>
+<label>Class HEX</label><input id="ubxClass" value="06">
+<label>ID HEX</label><input id="ubxId" value="01">
+<label>Payload HEX</label><textarea id="ubxPayload" rows="4"></textarea>
+<button onclick="pollUbx()">Poll</button><button class="gray" onclick="sendUbxConfig()">Send / запись</button>
+<div id="ubxStatus" class="small">Ожидание</div><h3>Последний ответ</h3><pre id="ubxFrame" class="coords">—</pre>
+</div></div>
 <div id="imuTab" class="hidden">
 <div class="card">
 <h2>Акселерометр и гироскоп</h2>
@@ -429,9 +441,11 @@ function showTab(name){
 document.getElementById('gpsTab').classList.toggle('hidden',name!=='gps');
 document.getElementById('imuTab').classList.toggle('hidden',name!=='imu');
 document.getElementById('uartTab').classList.toggle('hidden',name!=='uart');
+document.getElementById('ubxTab').classList.toggle('hidden',name!=='ubx');
 document.getElementById('tabGpsBtn').classList.toggle('active',name==='gps');
 document.getElementById('tabImuBtn').classList.toggle('active',name==='imu');
 document.getElementById('tabUartBtn').classList.toggle('active',name==='uart');
+document.getElementById('tabUbxBtn').classList.toggle('active',name==='ubx');
 if(name==='gps' && map) setTimeout(()=>map.invalidateSize(),150);
 }
 
@@ -540,6 +554,25 @@ async function changeUartBaud(value){
  document.getElementById('uartStatus').textContent=r.ok?'Скорость UART изменена на '+value+' бод':'Не удалось изменить скорость UART';
  refreshUart();
 }
+
+const ubxPresets={msg:['06','01',''],nav5:['06','24',''],prt:['06','00',''],rate:['06','08',''],tp5:['06','31','']};
+function selectUbxPreset(v){const p=ubxPresets[v];document.getElementById('ubxClass').value=p[0];document.getElementById('ubxId').value=p[1];document.getElementById('ubxPayload').value=p[2];}
+async function pollUbx(){
+ let payload='';
+ if(document.getElementById('ubxPreset').value==='msg')payload=prompt('CFG-MSG poll: message class and ID (например F0 00 = GGA)','F0 00')||'';
+ const cls=document.getElementById('ubxClass').value,id=document.getElementById('ubxId').value;
+ const r=await fetch('/ubx/send?cls='+cls+'&id='+id+'&payload='+encodeURIComponent(payload),{method:'POST'});
+ document.getElementById('ubxStatus').textContent=r.ok?'Poll отправлен':'Ошибка Poll';
+}
+async function sendUbxConfig(){
+ const cls=document.getElementById('ubxClass').value,id=document.getElementById('ubxId').value,payload=document.getElementById('ubxPayload').value;
+ const r=await fetch('/ubx/send?cls='+cls+'&id='+id+'&payload='+encodeURIComponent(payload),{method:'POST'});
+ document.getElementById('ubxStatus').textContent=r.ok?'Команда отправлена':'Ошибка отправки';
+}
+async function refreshUbxStatus(){
+ try{const d=await (await fetch('/ubx/status')).json();document.getElementById('ubxStatus').textContent=d.event;document.getElementById('ubxFrame').textContent=d.frame||'Ответ ещё не получен';}catch(e){}
+}
+
 async function refreshUart(){
  const status=document.getElementById('uartStatus');
  try{
@@ -630,6 +663,7 @@ document.getElementById('mapSelect').addEventListener('change',e=>selectMap(e.ta
 setInterval(()=>{if(!document.getElementById('gpsTab').classList.contains('hidden'))refreshGps();},1000);
 setInterval(()=>{if(!document.getElementById('imuTab').classList.contains('hidden'))refreshImu();},200);
 setInterval(()=>{if(!document.getElementById('uartTab').classList.contains('hidden'))refreshUart();},500);
+setInterval(()=>{if(!document.getElementById('ubxTab').classList.contains('hidden'))refreshUbxStatus();},500);
 refreshUart();
 loadMaps();
 refreshGps();
@@ -904,6 +938,8 @@ void setup() {
   server.on("/points/update", HTTP_POST, handleUpdatePoint);
   server.on("/points/delete", HTTP_POST, handleDeletePoint);
   server.on("/uart/baud", HTTP_POST, handleSetBaud);
+  server.on("/ubx/send", HTTP_POST, handleUbxSend);
+  server.on("/ubx/status", HTTP_GET, handleUbxStatus);
   server.on("/imu", HTTP_GET, handleImu);
   server.on("/uart", HTTP_GET, handleUart);
   server.on("/maps", HTTP_GET, handleMaps);
@@ -986,6 +1022,7 @@ void loop() {
   }
   while (gpsSerial.available()) {
     char c = gpsSerial.read();
+    processUbxByte((uint8_t)c);
     uartTotalBytes++; uartBytesWindow++; uartLastByteMs = millis();
     if (c == '\n') {
       uartCurrentLine.trim();
