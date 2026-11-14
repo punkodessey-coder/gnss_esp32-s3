@@ -58,6 +58,10 @@ double altitude = 0.0;
 int satellites = 0;
 double hdop = 0.0;
 unsigned long lastFixMs = 0;
+unsigned long uartLastByteMs = 0, uartWindowStartMs = 0, uartBytesWindow = 0;
+unsigned long uartBytesPerSecond = 0, uartTotalBytes = 0, uartInvalidSentences = 0;
+String uartCurrentLine, uartLastLine, uartRecentLines;
+bool uartLineOverflow = false;
 
 bool imuReady = false;
 float ax = 0, ay = 0, az = 0;
@@ -175,6 +179,24 @@ void readImu() {
   }
 }
 
+String uartJson() {
+  JsonDocument doc;
+  doc["baud"] = GPS_BAUD;
+  doc["rx_pin"] = GPS_RX_PIN;
+  doc["tx_pin"] = GPS_TX_PIN;
+  doc["bytes_total"] = uartTotalBytes;
+  doc["bytes_per_second"] = uartBytesPerSecond;
+  doc["last_byte_age_ms"] = uartLastByteMs ? (long)(millis() - uartLastByteMs) : -1;
+  doc["invalid_sentences"] = uartInvalidSentences;
+  doc["checksum_passed"] = gps.passedChecksum();
+  doc["checksum_failed"] = gps.failedChecksum();
+  doc["chars_processed"] = gps.charsProcessed();
+  doc["last_sentence"] = uartLastLine;
+  doc["recent"] = uartRecentLines;
+  doc["line_overflow"] = uartLineOverflow;
+  String out; serializeJson(doc, out); return out;
+}
+
 String coordsJson() {
   JsonDocument doc;
   doc["valid"] = haveFix;
@@ -270,6 +292,7 @@ select{padding:8px;border-radius:6px;background:#222;color:#eee;border:1px solid
 <div class="tabs">
 <button id="tabGpsBtn" class="tab active" onclick="showTab('gps')">GPS</button>
 <button id="tabImuBtn" class="tab" onclick="showTab('imu')">IMU</button>
+<button id="tabUartBtn" class="tab" onclick="showTab('uart')">UART</button>
 </div>
 
 <div id="gpsTab">
@@ -298,6 +321,13 @@ select{padding:8px;border-radius:6px;background:#222;color:#eee;border:1px solid
 <div id="map"></div>
 </div>
 
+<div id="uartTab" class="hidden">
+<div class="card"><h2>Монитор UART GPS</h2>
+<div id="uartStatus" class="small">Ожидание данных UART…</div>
+<pre id="uartStats" class="coords">—</pre>
+<h3>Последняя строка NMEA</h3><pre id="uartLast" class="coords">—</pre>
+<h3>Последние строки NMEA</h3><pre id="uartRecent" class="coords">—</pre>
+</div></div>
 <div id="imuTab" class="hidden">
 <div class="card">
 <h2>Акселерометр и гироскоп</h2>
@@ -316,11 +346,19 @@ let tileLayer=null;
 function showTab(name){
 document.getElementById('gpsTab').classList.toggle('hidden',name!=='gps');
 document.getElementById('imuTab').classList.toggle('hidden',name!=='imu');
+document.getElementById('uartTab').classList.toggle('hidden',name!=='uart');
 document.getElementById('tabGpsBtn').classList.toggle('active',name==='gps');
 document.getElementById('tabImuBtn').classList.toggle('active',name==='imu');
+document.getElementById('tabUartBtn').classList.toggle('active',name==='uart');
+if(name==='gps' && map) setTimeout(()=>map.invalidateSize(),150);
 }
 
-const map=L.map('map').setView([59.9386,30.3141],11);\nlet gpsMarker=null;
+let map=null, gpsMarker=null, tileLayer=null;
+function initMap(){
+  if(typeof L==='undefined'){document.getElementById('mapStatus').textContent='Leaflet не загрузилась — проверьте интернет и обновите страницу';return false;}
+  if(!map){map=L.map('map').setView([59.9386,30.3141],11);}
+  return true;
+}
 
 async function loadMaps(){
   const select=document.getElementById('mapSelect');
@@ -343,9 +381,10 @@ async function loadMaps(){
   }catch(e){
     document.getElementById('mapStatus').textContent='microSD недоступна; онлайн-карты доступны при наличии интернета';
   }
-  selectMap('online:osm');
+  if(initMap()) selectMap('online:osm');
 }
 function selectMap(value){
+  if(!initMap()) return;
   if(tileLayer){map.removeLayer(tileLayer);tileLayer=null;}
   if(value==='online:osm'){
     tileLayer=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'});
@@ -365,13 +404,23 @@ function selectMap(value){
 async function refreshGps(){
 try{
 const d=await (await fetch('/coords')).json();
-if(!d.valid){document.getElementById('status').textContent='Нет GPS-фикса';return;}
+if(!d.valid){document.getElementById('status').textContent='Нет GPS-фикса — проверяйте вкладку UART: приём NMEA может идти без координат';document.getElementById('coords').textContent='Координаты пока недоступны';return;}
 const text=d.lat+', '+d.lng;
 document.getElementById('coords').textContent=text;
-document.getElementById('status').textContent='Спутников: '+d.sat+' | HDOP: '+d.hdop+' | обновлено '+Math.round(d.age_ms/1000)+' с назад';\nif(!gpsMarker){gpsMarker=L.marker([d.lat,d.lng]).addTo(map);map.setView([d.lat,d.lng],16);}else{gpsMarker.setLatLng([d.lat,d.lng]);}
+document.getElementById('status').textContent='Спутников: '+d.sat+' | HDOP: '+d.hdop+' | обновлено '+Math.round(d.age_ms/1000)+' с назад';\nif(initMap()){if(!gpsMarker){gpsMarker=L.marker([d.lat,d.lng]).addTo(map);map.setView([d.lat,d.lng],16);}else{gpsMarker.setLatLng([d.lat,d.lng]);}}
 }catch(e){}
 }
 
+async function refreshUart(){
+try{
+ const d=await (await fetch('/uart',{cache:'no-store'})).json();
+ const age=d.last_byte_age_ms<0?'байтов ещё не было':(d.last_byte_age_ms<1500?'приём идёт':'последний байт '+(d.last_byte_age_ms/1000).toFixed(1)+' с назад');
+ document.getElementById('uartStatus').textContent=age+' | '+d.baud+' бод | RX GPIO'+d.rx_pin+' / TX GPIO'+d.tx_pin;
+ document.getElementById('uartStats').textContent='Всего байтов: '+d.bytes_total+'\\nСкорость: '+d.bytes_per_second+' байт/с\\nChecksum OK: '+d.checksum_passed+'\\nОшибок checksum: '+d.checksum_failed+'\\nОбработано символов: '+d.chars_processed+'\\nОшибок/переполнений строк: '+d.invalid_sentences;
+ document.getElementById('uartLast').textContent=d.last_sentence||'Полная строка NMEA ещё не получена';
+ document.getElementById('uartRecent').textContent=d.recent||'—';
+}catch(e){document.getElementById('uartStatus').textContent='Ошибка UART API: '+e.message;}
+}
 async function refreshImu(){
 try{
 const d=await (await fetch('/imu')).json();
@@ -423,6 +472,8 @@ status.textContent='Bluetooth: '+e.message;
 document.getElementById('mapSelect').addEventListener('change',e=>selectMap(e.target.value));
 setInterval(()=>{if(!document.getElementById('gpsTab').classList.contains('hidden'))refreshGps();},2000);
 setInterval(()=>{if(!document.getElementById('imuTab').classList.contains('hidden'))refreshImu();},200);
+setInterval(()=>{if(!document.getElementById('uartTab').classList.contains('hidden'))refreshUart();},500);
+refreshUart();
 loadMaps();
 refreshGps();
 </script>
@@ -436,6 +487,10 @@ void handleCoords() {
   server.send(200, "application/json", coordsJson());
 }
 
+void handleUart() {
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", uartJson());
+}
 void handleImu() {
   server.sendHeader("Cache-Control", "no-store");
   server.send(200, "application/json", imuJson());
@@ -462,7 +517,7 @@ void handleTile() {
     return;
   }
 
-  String path = String(SD_MOUNT) + "/maps/" + mapName + "/" + z + "/" + x + "/" + y + ".png";
+  String path = "/maps/" + mapName + "/" + z + "/" + x + "/" + y + ".png";
 
   if (!SD_MMC.exists(path)) {
     server.send(404, "text/plain", "Tile not found");
@@ -612,6 +667,7 @@ void setup() {
   server.on("/", HTTP_GET, handleRoot);
   server.on("/coords", HTTP_GET, handleCoords);
   server.on("/imu", HTTP_GET, handleImu);
+  server.on("/uart", HTTP_GET, handleUart);
   server.on("/maps", HTTP_GET, handleMaps);
   server.on("/tiles", HTTP_GET, handleTile);
   server.on("/display/test", HTTP_POST, handleDisplayTest);
@@ -651,9 +707,25 @@ void setup() {
 void loop() {
   server.handleClient();
 
+  unsigned long now = millis();
+  if (now - uartWindowStartMs >= 1000) {
+    uartBytesPerSecond = uartBytesWindow; uartBytesWindow = 0; uartWindowStartMs = now;
+  }
   while (gpsSerial.available()) {
     char c = gpsSerial.read();
-
+    uartTotalBytes++; uartBytesWindow++; uartLastByteMs = millis();
+    if (c == '\n') {
+      uartCurrentLine.trim();
+      if (uartCurrentLine.length()) {
+        uartLastLine = uartCurrentLine;
+        uartRecentLines += uartCurrentLine + "\\n";
+        if (uartRecentLines.length() > 1200) uartRecentLines.remove(0, uartRecentLines.length()-1200);
+      }
+      uartCurrentLine = ""; uartLineOverflow = false;
+    } else if (c != '\r') {
+      if (uartCurrentLine.length() < 160) uartCurrentLine += c;
+      else { uartLineOverflow = true; uartInvalidSentences++; uartCurrentLine = ""; }
+    }
     if (gps.encode(c)) {
       if (gps.location.isValid() && gps.location.isUpdated()) {
         lat = gps.location.lat();
