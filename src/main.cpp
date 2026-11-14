@@ -284,7 +284,7 @@ body{margin:0;padding:12px;background:#111;color:#eee;font-family:system-ui,sans
 .metric{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #333;color:#aaa}
 .metric strong{color:#fff;font:600 18px ui-monospace,monospace}
 .gps-card .coords{margin-top:14px;color:#8ab4ff}
-.coords,.imu{font-family:monospace;font-size:17px;word-break:break-all;white-space:pre-wrap}
+.coords,.imu{font-family:monospace;font-size:15px;word-break:break-word;white-space:pre-wrap;line-height:1.5}\n#uartStats,#uartLast,#uartRecent{font-size:13px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}\n#uartRecent{max-height:52vh;overflow:auto;background:#151515;border-radius:8px;padding:10px}
 button{padding:10px 14px;border:0;border-radius:8px;background:#2f81f7;color:#fff;font-size:15px;margin:4px 4px 0 0}
 button.gray{background:#555}
 #map{height:50vh;border-radius:12px}
@@ -438,7 +438,7 @@ async function refreshUart(){
   if(!d || typeof d.baud!=='number' || typeof d.rx_pin!=='number' || typeof d.tx_pin!=='number') throw new Error('В ответе /uart отсутствуют обязательные поля');
   const age=d.last_byte_age_ms<0?'байтов ещё не было':(d.last_byte_age_ms<1500?'приём идёт':'последний байт '+(d.last_byte_age_ms/1000).toFixed(1)+' с назад');
   status.textContent=age+' | '+d.baud+' бод | RX GPIO'+d.rx_pin+' / TX GPIO'+d.tx_pin;
-  document.getElementById('uartStats').textContent='Всего байтов: '+d.bytes_total+'\\nСкорость: '+d.bytes_per_second+' байт/с\\nChecksum OK: '+d.checksum_passed+'\\nОшибок checksum: '+d.checksum_failed+'\\nОбработано символов: '+d.chars_processed+'\\nОшибок/переполнений строк: '+d.invalid_sentences;
+  document.getElementById('uartStats').textContent='Всего байтов: '+d.bytes_total+'\nСкорость: '+d.bytes_per_second+' байт/с\nChecksum OK: '+d.checksum_passed+'\nОшибок checksum: '+d.checksum_failed+'\nОбработано символов: '+d.chars_processed+'\nОшибок/переполнений строк: '+d.invalid_sentences;
   document.getElementById('uartLast').textContent=d.last_sentence||'Полная строка NMEA ещё не получена';
   document.getElementById('uartRecent').textContent=d.recent||'—';
  }catch(e){status.textContent='Ошибка UART API: '+(e && e.message ? e.message : String(e));}
