@@ -278,17 +278,24 @@ String savedPointsResponse() {
 String imuJson() {
   JsonDocument doc;
   doc["ready"] = imuReady;
-  doc["ax"] = ax;
-  doc["ay"] = ay;
-  doc["az"] = az;
-  doc["gx"] = gx;
-  doc["gy"] = gy;
-  doc["gz"] = gz;
+  doc["chip_id"] = imuReady ? imu.getChipID() : 0;
+  doc["firmware_version"] = imuReady ? imu.getFirmwareVersion() : 0;
+  doc["temperature_c"] = imuReady ? imu.getTemperature() : NAN;
+  doc["sensor_timestamp"] = imuReady ? imu.getTimestamp() : 0;
+  doc["accel_enabled"] = imuReady && imu.isAccelEnabled();
+  doc["gyro_enabled"] = imuReady && imu.isGyroEnabled();
+  doc["interrupt_status"] = imuReady ? imu.getInterruptStatus() : 0;
+  doc["ax"] = ax; doc["ay"] = ay; doc["az"] = az;
+  doc["gx"] = gx; doc["gy"] = gy; doc["gz"] = gz;
+  doc["accel_magnitude"] = sqrtf(ax*ax + ay*ay + az*az);
+  doc["gyro_magnitude"] = sqrtf(gx*gx + gy*gy + gz*gz);
+  doc["roll_deg"] = atan2f(ay, az) * 57.2957795f;
+  doc["pitch_deg"] = atan2f(-ax, sqrtf(ay*ay + az*az)) * 57.2957795f;
+  doc["gyro_offset_x"] = gyroOffsetX; doc["gyro_offset_y"] = gyroOffsetY; doc["gyro_offset_z"] = gyroOffsetZ;
   doc["calibrated"] = gyroOffsetX != 0 || gyroOffsetY != 0 || gyroOffsetZ != 0;
-
-  String out;
-  serializeJson(doc, out);
-  return out;
+  doc["sample_period_ms"] = 20;
+  doc["i2c_address"] = 0x6A; 
+  String out; serializeJson(doc, out); return out;
 }
 
 String mapsJson() {
@@ -351,7 +358,15 @@ button.gray{background:#555}
 #map{height:50vh;border-radius:12px}
 .small{color:#aaa;font-size:13px}
 .hidden{display:none}
-select{padding:8px;border-radius:6px;background:#222;color:#eee;border:1px solid #444}
+select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;border:1px solid #444;max-width:100%;box-sizing:border-box}
+.ubx-layout{display:grid;grid-template-columns:minmax(150px,220px) 1fr;gap:14px;margin-top:14px}
+.ubx-nav{display:flex;flex-direction:column;gap:5px}.ubx-nav-item{text-align:left;background:#292929;margin:0}.ubx-nav-item.active{background:#245ca5}
+.ubx-panel{min-width:0;background:#171717;border-radius:10px;padding:14px}
+.ubx-field{display:grid;grid-template-columns:minmax(130px,1fr) minmax(120px,1fr);gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid #333}
+.ubx-field label{color:#bbb}.ubx-field input,.ubx-field select{width:100%}.ubx-checks{display:flex;flex-wrap:wrap;gap:14px}.ubx-checks label{display:flex;gap:6px;align-items:center}
+.ubx-actions{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}
+@media(max-width:650px){.ubx-layout{grid-template-columns:1fr}.ubx-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.ubx-nav-item{font-size:12px;padding:8px}.ubx-field{grid-template-columns:1fr}}
+
 </style>
 </head>
 <body>
@@ -412,26 +427,31 @@ select{padding:8px;border-radius:6px;background:#222;color:#eee;border:1px solid
 <h3>Последняя строка NMEA</h3><pre id="uartLast" class="coords">—</pre>
 <h3>Последние строки NMEA</h3><pre id="uartRecent" class="coords">—</pre>
 </div></div>
-<div id="ubxTab" class="hidden"><div class="card">
-<h2>u-blox — Configuration View</h2>
-<div class="small">UBX CFG: MSG, NAV5, PRT, RATE, TP5. Poll запрашивает параметры, Send отправляет payload. Payload вводится в HEX по документации конкретной модели u-blox.</div>
-<label>Раздел</label><select id="ubxPreset" onchange="selectUbxPreset(this.value)">
-<option value="msg">CFG-MSG (06 01)</option><option value="nav5">CFG-NAV5 (06 24)</option><option value="prt">CFG-PRT (06 00)</option><option value="rate">CFG-RATE (06 08)</option><option value="tp5">CFG-TP5 (06 31)</option></select>
-<label>Class HEX</label><input id="ubxClass" value="06">
-<label>ID HEX</label><input id="ubxId" value="01">
-<label>Payload HEX</label><textarea id="ubxPayload" rows="4"></textarea>
-<button onclick="pollUbx()">Poll</button><button class="gray" onclick="sendUbxConfig()">Send / запись</button>
-<div id="ubxStatus" class="small">Ожидание</div><h3>Последний ответ</h3><pre id="ubxFrame" class="coords">—</pre>
-</div></div>
+<div id="ubxTab" class="hidden">
+<div class="card"><h2>u-blox — Configuration View</h2>
+<div class="small">Профили классического протокола UBX-CFG для NEO-6M. Выберите раздел слева, нажмите «Считать» для загрузки текущих параметров, измените поля и нажмите «Записать». Набор разделов зависит от поколения приёмника; CFG-VALSET здесь не используется.</div>
+<div class="ubx-layout">
+<nav id="ubxNav" class="ubx-nav">
+<button class="ubx-nav-item active" data-page="msg" onclick="selectUbxPage('msg')">MSG — Messages</button>
+<button class="ubx-nav-item" data-page="prt" onclick="selectUbxPage('prt')">PRT — Ports</button>
+<button class="ubx-nav-item" data-page="rate" onclick="selectUbxPage('rate')">RATE — Rates</button>
+<button class="ubx-nav-item" data-page="nav5" onclick="selectUbxPage('nav5')">NAV5 — Navigation</button>
+<button class="ubx-nav-item" data-page="sbas" onclick="selectUbxPage('sbas')">SBAS</button>
+<button class="ubx-nav-item" data-page="nmea" onclick="selectUbxPage('nmea')">NMEA</button>
+<button class="ubx-nav-item" data-page="cfg" onclick="selectUbxPage('cfg')">CFG — Save config</button>
+</nav>
+<section class="ubx-panel">
+<h3 id="ubxPageTitle">MSG — Message rates</h3>
+<div id="ubxFields"></div>
+<div class="ubx-actions"><button onclick="pollUbxPage()">Считать (Poll)</button><button onclick="writeUbxPage()">Записать (Send)</button><button class="gray" onclick="pollUbxPage()">Обновить</button></div>
+<div id="ubxStatus" class="small">Подключите TX GPS к RX ESP32 и RX GPS к TX ESP32 для двусторонней настройки.</div>
+<details><summary>Последний ответ приёмника (диагностика)</summary><pre id="ubxFrame" class="coords">—</pre></details>
+</section></div></div></div>
 <div id="pointsTab" class="hidden"><div class="card"><h2>Сохранённые точки</h2><div class="small">Название и координаты сохранённых местоположений</div><div id="savedPointsList" class="small">Загрузка…</div></div></div>
 <div id="imuTab" class="hidden">
-<div class="card">
-<h2>Акселерометр и гироскоп</h2>
-<div id="imuStatus" class="small">Ожидание данных…</div>
-<div id="imuData" class="imu">—</div>
-<button onclick="calibrateZero()">Откалибровать 0</button>
-<button class="gray" onclick="resetCalibration()">Сбросить калибровку</button>
-</div>
+<div class="card"><h2>QMI8658 — состояние и идентификация</h2><div id="imuStatus" class="small">Ожидание данных…</div><pre id="imuData" class="imu">—</pre></div>
+<div class="card"><h3>Калибровка гироскопа</h3><div class="small">Положите плату неподвижно на ровную поверхность во время калибровки.</div><button onclick="calibrateZero()">Откалибровать смещение</button><button class="gray" onclick="resetCalibration()">Сбросить калибровку</button></div>
+<div class="card"><h3>Доступные измерения</h3><div class="small">QMI8658 — 6-осевой IMU: три оси акселерометра и три оси гироскопа. Магнитометра и встроенного компаса на этой плате нет. Roll/Pitch вычисляются по вектору ускорения; yaw без магнитометра/внешней привязки не определяется.</div></div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -450,7 +470,7 @@ document.getElementById('tabImuBtn').classList.toggle('active',name==='imu');
 document.getElementById('tabUartBtn').classList.toggle('active',name==='uart');
 document.getElementById('tabUbxBtn').classList.toggle('active',name==='ubx');
 document.getElementById('tabPointsBtn').classList.toggle('active',name==='points');
-if(name==='gps' && map) setTimeout(()=>map.invalidateSize(),150);
+if(name==='gps' && map) setTimeout(()=>map.invalidateSize(),150); if(name==='ubx' && !document.getElementById('ubxFields').children.length) selectUbxPage('msg');
 }
 
 let map=null, gpsMarker=null, currentFix=false;
@@ -559,22 +579,70 @@ async function changeUartBaud(value){
  refreshUart();
 }
 
-const ubxPresets={msg:['06','01',''],nav5:['06','24',''],prt:['06','00',''],rate:['06','08',''],tp5:['06','31','']};
-function selectUbxPreset(v){const p=ubxPresets[v];document.getElementById('ubxClass').value=p[0];document.getElementById('ubxId').value=p[1];document.getElementById('ubxPayload').value=p[2];}
-async function pollUbx(){
- let payload='';
- if(document.getElementById('ubxPreset').value==='msg')payload=prompt('CFG-MSG poll: message class and ID (например F0 00 = GGA)','F0 00')||'';
- const cls=document.getElementById('ubxClass').value,id=document.getElementById('ubxId').value;
- const r=await fetch('/ubx/send?cls='+cls+'&id='+id+'&payload='+encodeURIComponent(payload),{method:'POST'});
- document.getElementById('ubxStatus').textContent=r.ok?'Poll отправлен':'Ошибка Poll';
+let ubxPage='msg',ubxLastFrame='';
+const ubxPageInfo={
+msg:{title:'MSG — Rates of individual messages',cls:6,id:1},
+prt:{title:'PRT — Port configuration (UART1)',cls:6,id:0},
+rate:{title:'RATE — Measurement and navigation rate',cls:6,id:8},
+nav5:{title:'NAV5 — Navigation engine settings',cls:6,id:36},
+sbas:{title:'SBAS — Satellite Based Augmentation',cls:6,id:22},
+nmea:{title:'NMEA — NMEA protocol settings',cls:6,id:23},
+cfg:{title:'CFG — Save current configuration',cls:6,id:9}
+};
+function field(id,label,value,type='number',extra=''){return '<div class="ubx-field"><label for="'+id+'">'+label+'</label><input id="'+id+'" type="'+type+'" value="'+value+'" '+extra+'></div>';}
+function selectField(id,label,value,options){return '<div class="ubx-field"><label for="'+id+'">'+label+'</label><select id="'+id+'">'+options.map(o=>'<option value="'+o[0]+'" '+(String(value)===String(o[0])?'selected':'')+'>'+o[1]+'</option>').join('')+'</select></div>';}
+function checkField(id,label,checked){return '<div class="ubx-field"><label>'+label+'</label><label><input id="'+id+'" type="checkbox" '+(checked?'checked':'')+'> Включено</label></div>';}
+function selectUbxPage(page){
+ ubxPage=page;document.querySelectorAll('.ubx-nav-item').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
+ document.getElementById('ubxPageTitle').textContent=ubxPageInfo[page].title;
+ const f=document.getElementById('ubxFields');
+ if(page==='msg')f.innerHTML=selectField('msgClass','Класс сообщения',['F0','F1','01','02'].includes('F0')?'F0':'F0',[['F0','NMEA standard'],['F1','NMEA proprietary'],['01','NAV'],['02','RXM']])+selectField('msgId','Сообщение (ID)','00',[['00','GGA — Fix data'],['01','GLL — Geographic position'],['02','GSA — DOP and active satellites'],['03','GSV — Satellites in view'],['04','RMC — Recommended minimum'],['05','VTG — Course and speed'],['08','ZDA — Time and date']])+selectField('msgRate','Частота на UART1','1',[['0','Выключено'],['1','Каждое решение'],['2','Каждое второе'],['5','Каждое пятое']]);
+ if(page==='prt')f.innerHTML=selectField('prtPort','Порт','1',[['1','UART1']])+selectField('prtBaud','Скорость UART','57600',[['9600','9600'],['19200','19200'],['38400','38400'],['57600','57600'],['115200','115200'],['230400','230400']])+checkField('prtInUbx','Принимать UBX',true)+checkField('prtInNmea','Принимать NMEA',true)+checkField('prtOutUbx','Передавать UBX',false)+checkField('prtOutNmea','Передавать NMEA',true);
+ if(page==='rate')f.innerHTML=field('rateMeas','Measurement period (ms)',1000)+field('rateNav','Navigation rate (cycles)',1)+selectField('rateRef','Time reference',1,[[0,'UTC'],[1,'GPS'],[2,'GLONASS'],[3,'BeiDou'],[4,'Galileo']]);
+ if(page==='nav5')f.innerHTML=selectField('navFix','Dynamic platform model',0,[[0,'Portable'],[2,'Stationary'],[3,'Pedestrian'],[4,'Automotive'],[5,'Sea'],[6,'Airborne <1g'],[7,'Airborne <2g'],[8,'Airborne <4g']])+selectField('navFixMode','Fix mode',3,[[1,'2D only'],[2,'3D only'],[3,'Auto 2D/3D']])+field('navMinElev','Minimum elevation (°)',5)+field('navDrLimit','Dead reckoning limit (s)',0)+field('navPAcc','Position accuracy mask (m)',100)+field('navTAcc','Time accuracy mask (m)',300)+checkField('navFix3d','Задействовать ограничения фикса',false);
+ if(page==='sbas')f.innerHTML=checkField('sbasEnable','SBAS включён',true)+selectField('sbasMode','Режим',3,[[0,'Только тест'],[1,'Только ranging'],[3,'Ranging + corrections']])+field('sbasMax','Максимум SBAS спутников',3)+checkField('sbasRanging','Использовать ranging',true)+checkField('sbasDiff','Использовать differential corrections',true)+checkField('sbasIntegrity','Использовать integrity',true);
+ if(page==='nmea')f.innerHTML=selectField('nmeaVersion','Версия NMEA',4,[[0,'2.1'],[1,'2.3'],[2,'2.3'],[3,'2.3'],[4,'4.0']])+selectField('nmeaNumSV','Номер спутника',0,[[0,'Extended'],[1,'Strict']])+checkField('nmeaCompat','Compatibility mode',false)+checkField('nmeaConsider','Consider mode',false)+checkField('nmeaLimit82','Ограничение длины 82 символа',false);
+ if(page==='cfg')f.innerHTML='<p>Сохранить текущие параметры приёмника в энергонезависимую память (BBR/Flash) через CFG-CFG.</p>'+checkField('cfgBbr','Сохранить в BBR',true)+checkField('cfgFlash','Сохранить во Flash',true)+checkField('cfgClear','Очистить перед записью',false)+'<p class="small">Поддержка Flash зависит от конкретной платы NEO-6M и её памяти.</p>';
 }
-async function sendUbxConfig(){
- const cls=document.getElementById('ubxClass').value,id=document.getElementById('ubxId').value,payload=document.getElementById('ubxPayload').value;
- const r=await fetch('/ubx/send?cls='+cls+'&id='+id+'&payload='+encodeURIComponent(payload),{method:'POST'});
- document.getElementById('ubxStatus').textContent=r.ok?'Команда отправлена':'Ошибка отправки';
+function hexBytes(hex){return hex.trim().split(/\s+/).filter(Boolean).map(x=>parseInt(x,16));}
+function ubxFramePayload(){const b=hexBytes(ubxLastFrame);if(b.length<8||b[0]!==181||b[1]!==98)return null;return {cls:b[2],id:b[3],p:b.slice(6,-2)};}
+function u16(v){return [v&255,(v>>8)&255]} function u32(v){return [v&255,(v>>8)&255,(v>>16)&255,(v>>24)&255]}
+function payloadForPage(){
+ const n=id=>Number(document.getElementById(id).value)||0, ck=id=>document.getElementById(id).checked;
+ if(ubxPage==='msg')return [parseInt(document.getElementById('msgClass').value,16),parseInt(document.getElementById('msgId').value,16),0,n('msgRate'),0,0,0,0];
+ if(ubxPage==='prt'){let mode=0x000008D0,im=(ck('prtInUbx')?1:0)|(ck('prtInNmea')?2:0),om=(ck('prtOutUbx')?1:0)|(ck('prtOutNmea')?2:0);return [n('prtPort'),0,0,0,...u32(mode),...u32(n('prtBaud')),...u16(im),...u16(om),0,0,0,0];}
+ if(ubxPage==='rate')return [...u16(n('rateMeas')),...u16(n('rateNav')),...u16(n('rateRef'))];
+ if(ubxPage==='nav5'){let mask=0xFFFF, dyn=n('navFix'),fix=n('navFixMode');let p=[...u16(mask),dyn,fix,n('navMinElev')&255,0,...u16(n('navDrLimit')),...u32(n('navPAcc')),...u32(n('navTAcc')),...u16(0),...u16(0),...u32(0),...u32(0),0,0,0,0,0,0];return p.slice(0,36);}
+ if(ubxPage==='sbas'){let mode=n('sbasMode'),usage=(ck('sbasRanging')?1:0)|(ck('sbasDiff')?2:0)|(ck('sbasIntegrity')?4:0);return [ck('sbasEnable')?1:0,mode,usage,n('sbasMax'),0,0,0,0];}
+ if(ubxPage==='nmea'){let flags=(ck('nmeaCompat')?1:0)|(ck('nmeaConsider')?2:0)|(ck('nmeaLimit82')?4:0);return [n('nmeaVersion'),n('nmeaNumSV'),flags,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];}
+ if(ubxPage==='cfg'){let clear=(ck('cfgClear')?0xFFFF:0),save=(ck('cfgBbr')?0x0001:0)|(ck('cfgFlash')?0x0002:0);return [...u32(clear),...u32(save),...u32(0)];}
+ return [];
+}
+async function sendUbxPacket(cls,id,payload){const h=payload.map(v=>v.toString(16).padStart(2,'0')).join(' ');return fetch('/ubx/send?cls='+cls.toString(16)+'&id='+id.toString(16)+'&payload='+encodeURIComponent(h),{method:'POST'});}
+async function pollUbxPage(){
+ const q=ubxPage==='msg'?[parseInt(document.getElementById('msgClass').value,16),parseInt(document.getElementById('msgId').value,16)]:ubxPage==='tp5'?[0]:[];
+ const r=await sendUbxPacket(6,ubxPageInfo[ubxPage].id,q);
+ document.getElementById('ubxStatus').textContent=r.ok?'Запрос отправлен. Ожидаю ответ приёмника…':'Ошибка Poll';
+ setTimeout(refreshUbxStatus,350);
+}
+async function writeUbxPage(){
+ const p=payloadForPage(),r=await sendUbxPacket(6,ubxPageInfo[ubxPage].id,p);
+ document.getElementById('ubxStatus').textContent=r.ok?'Параметры отправлены. Проверьте ответ ACK/NAK.':'Ошибка отправки';
+ setTimeout(refreshUbxStatus,350);
+}
+function decodeUbxPage(frame){
+ const p=frame.p,d=document.getElementById('ubxFields');if(frame.cls!==6||frame.id!==ubxPageInfo[ubxPage].id)return;
+ const set=(id,v)=>{const e=document.getElementById(id);if(e)e.value=v;};
+ const check=(id,v)=>{const e=document.getElementById(id);if(e)e.checked=!!v;};
+ if(ubxPage==='msg'&&p.length>=8)set('msgRate',p[3]);
+ if(ubxPage==='prt'&&p.length>=20){set('prtPort',p[0]);set('prtBaud',(p[8]|p[9]<<8|p[10]<<16|p[11]<<24)>>>0);check('prtInUbx',p[12]&1);check('prtInNmea',p[12]&2);check('prtOutUbx',p[14]&1);check('prtOutNmea',p[14]&2);}
+ if(ubxPage==='rate'&&p.length>=6){set('rateMeas',p[0]|p[1]<<8);set('rateNav',p[2]|p[3]<<8);set('rateRef',p[4]|p[5]<<8);}
+ if(ubxPage==='nav5'&&p.length>=36){set('navFix',p[2]);set('navFixMode',p[3]);set('navMinElev',p[4]);set('navDrLimit',p[ that]);}
+ if(ubxPage==='sbas'&&p.length>=8){check('sbasEnable',p[0]&1);set('sbasMode',p[1]);check('sbasRanging',p[2]&1);check('sbasDiff',p[2]&2);check('sbasIntegrity',p[2]&4);set('sbasMax',p[3]);}
+ if(ubxPage==='nmea'&&p.length>=20){set('nmeaVersion',p[0]);set('nmeaNumSV',p[1]);check('nmeaCompat',p[2]&1);check('nmeaConsider',p[2]&2);check('nmeaLimit82',p[2]&4);}
 }
 async function refreshUbxStatus(){
- try{const d=await (await fetch('/ubx/status')).json();document.getElementById('ubxStatus').textContent=d.event;document.getElementById('ubxFrame').textContent=d.frame||'Ответ ещё не получен';}catch(e){}
+ try{const d=await (await fetch('/ubx/status')).json();document.getElementById('ubxFrame').textContent=d.frame||'Ответ ещё не получен';if(d.frame&&d.frame!==ubxLastFrame){ubxLastFrame=d.frame;const fr=ubxFramePayload();if(fr){decodeUbxPage(fr);document.getElementById('ubxStatus').textContent='Получен ответ UBX '+fr.cls.toString(16).toUpperCase()+':'+fr.id.toString(16).toUpperCase();}}else if(d.event)document.getElementById('ubxStatus').textContent=d.event;}catch(e){}
 }
 
 async function refreshUart(){
@@ -598,10 +666,17 @@ async function refreshUart(){
 async function refreshImu(){
 try{
 const d=await (await fetch('/imu')).json();
-if(!d.ready){document.getElementById('imuStatus').textContent='QMI8658 не найден';document.getElementById('imuData').textContent='—';return;}
-document.getElementById('imuStatus').textContent=d.calibrated?'Калибровка нуля активна':'Калибровка не задана';
-document.getElementById('imuData').textContent='AX '+d.ax.toFixed(2)+' m/s2\nAY '+d.ay.toFixed(2)+' m/s2\nAZ '+d.az.toFixed(2)+' m/s2\n\nGX '+d.gx.toFixed(3)+' deg/s\nGY '+d.gy.toFixed(3)+' deg/s\nGZ '+d.gz.toFixed(3)+' deg/s';
-}catch(e){}
+if(!d.ready){document.getElementById('imuStatus').textContent='QMI8658 не найден или не инициализирован';document.getElementById('imuData').textContent='—';return;}
+document.getElementById('imuStatus').textContent='Датчик доступен | ACC: '+(d.accel_enabled?'ON':'OFF')+' | GYRO: '+(d.gyro_enabled?'ON':'OFF')+' | I2C 0x'+Number(d.i2c_address).toString(16).toUpperCase();
+const f=(v,n=3)=>Number(v).toFixed(n);
+document.getElementById('imuData').textContent=
+'ИДЕНТИФИКАЦИЯ\nChip ID: 0x'+Number(d.chip_id).toString(16).toUpperCase()+' | Firmware: '+d.firmware_version+'\nТемпература датчика: '+f(d.temperature_c,2)+' °C\nВнутренний timestamp: '+d.sensor_timestamp+'\nСтатус прерываний: 0x'+Number(d.interrupt_status).toString(16).toUpperCase()+
+'\n\nАКСЕЛЕРОМЕТР (m/s²)\nX: '+f(d.ax)+' | Y: '+f(d.ay)+' | Z: '+f(d.az)+'\nМодуль ускорения: '+f(d.accel_magnitude)+' m/s²'+
+'\n\nГИРОСКОП (°/s)\nX: '+f(d.gx)+' | Y: '+f(d.gy)+' | Z: '+f(d.gz)+'\nМодуль угловой скорости: '+f(d.gyro_magnitude)+' °/s'+
+'\n\nРАСЧЁТНАЯ ОРИЕНТАЦИЯ\nRoll: '+f(d.roll_deg,2)+'° | Pitch: '+f(d.pitch_deg,2)+'°\nYaw: недоступен без магнитометра/внешней привязки'+
+'\n\nКАЛИБРОВКА ГИРОСКОПА\nX: '+f(d.gyro_offset_x,4)+' | Y: '+f(d.gyro_offset_y,4)+' | Z: '+f(d.gyro_offset_z,4)+' °/s\nСтатус: '+(d.calibrated?'смещение сохранено':'смещение не задано')+
+'\n\nОбновление опроса: '+d.sample_period_ms+' ms';
+}catch(e){document.getElementById('imuStatus').textContent='Ошибка чтения IMU: '+e.message;}
 }
 
 async function startNmeaSimulator(){
@@ -669,6 +744,7 @@ setInterval(()=>{if(!document.getElementById('imuTab').classList.contains('hidde
 setInterval(()=>{if(!document.getElementById('uartTab').classList.contains('hidden'))refreshUart();},500);
 setInterval(()=>{if(!document.getElementById('ubxTab').classList.contains('hidden'))refreshUbxStatus();},500);
 refreshUart();
+selectUbxPage('msg');
 loadMaps();
 refreshGps();
 refreshSavedPoints();
