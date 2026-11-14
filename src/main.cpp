@@ -413,14 +413,22 @@ if(initMap()){if(!gpsMarker){gpsMarker=L.marker([d.lat,d.lng]).addTo(map);map.se
 }
 
 async function refreshUart(){
-try{
- const d=await (await fetch('/uart',{cache:'no-store'})).json();
- const age=d.last_byte_age_ms<0?'байтов ещё не было':(d.last_byte_age_ms<1500?'приём идёт':'последний байт '+(d.last_byte_age_ms/1000).toFixed(1)+' с назад');
- document.getElementById('uartStatus').textContent=age+' | '+d.baud+' бод | RX GPIO'+d.rx_pin+' / TX GPIO'+d.tx_pin;
- document.getElementById('uartStats').textContent='Всего байтов: '+d.bytes_total+'\nСкорость: '+d.bytes_per_second+' байт/с\nChecksum OK: '+d.checksum_passed+'\nОшибок checksum: '+d.checksum_failed+'\nОбработано символов: '+d.chars_processed+'\nОшибок/переполнений строк: '+d.invalid_sentences;
- document.getElementById('uartLast').textContent=d.last_sentence||'Полная строка NMEA ещё не получена';
- document.getElementById('uartRecent').textContent=d.recent||'—';
-}catch(e){document.getElementById('uartStatus').textContent='Ошибка UART API: '+e.message;}
+ const status=document.getElementById('uartStatus');
+ try{
+  // Query token avoids stale responses and avoids Safari RequestInit/cache quirks.
+  const apiUrl=window.location.origin+'/uart?ts='+Date.now();
+  const response=await fetch(apiUrl);
+  const body=await response.text();
+  if(!response.ok) throw new Error('HTTP '+response.status+': '+body.slice(0,120));
+  let d;
+  try{d=JSON.parse(body);}catch(parseError){throw new Error('Некорректный JSON от /uart: '+body.slice(0,120));}
+  if(!d || typeof d.baud!=='number' || typeof d.rx_pin!=='number' || typeof d.tx_pin!=='number') throw new Error('В ответе /uart отсутствуют обязательные поля');
+  const age=d.last_byte_age_ms<0?'байтов ещё не было':(d.last_byte_age_ms<1500?'приём идёт':'последний байт '+(d.last_byte_age_ms/1000).toFixed(1)+' с назад');
+  status.textContent=age+' | '+d.baud+' бод | RX GPIO'+d.rx_pin+' / TX GPIO'+d.tx_pin;
+  document.getElementById('uartStats').textContent='Всего байтов: '+d.bytes_total+'\\nСкорость: '+d.bytes_per_second+' байт/с\\nChecksum OK: '+d.checksum_passed+'\\nОшибок checksum: '+d.checksum_failed+'\\nОбработано символов: '+d.chars_processed+'\\nОшибок/переполнений строк: '+d.invalid_sentences;
+  document.getElementById('uartLast').textContent=d.last_sentence||'Полная строка NMEA ещё не получена';
+  document.getElementById('uartRecent').textContent=d.recent||'—';
+ }catch(e){status.textContent='Ошибка UART API: '+(e && e.message ? e.message : String(e));}
 }
 async function refreshImu(){
 try{
