@@ -44,7 +44,10 @@ const char* AP_PASS = "12345678";
 #define COLOR_BLUE 0x001F
 
 HardwareSerial gpsSerial(2);
+HardwareSerial simulatorSerial(1); // NMEA test output: TX GPIO8, RX GPIO9 (unused)
 TinyGPSPlus gps;
+bool nmeaSimulatorEnabled = false;
+unsigned long lastSimulatorSentenceMs = 0;
 Arduino_DataBus *displayBus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD_MOSI);
 Arduino_GFX *gfx = new Arduino_ST7789(displayBus, LCD_RST, 1, true, LCD_WIDTH, LCD_HEIGHT, 34, 0, 34, 0);
 SensorQMI8658 imu;
@@ -77,6 +80,9 @@ BLECharacteristic* bleNotify = nullptr;
 bool bleConnected = false;
 
 void startDisplayTest();
+void sendNmeaSimulatorFrame();
+void handleSimulatorStart();
+void handleSimulatorStop();
 void calibrateImuZero();
 void resetImuCalibration();
 
@@ -311,6 +317,13 @@ select{padding:8px;border-radius:6px;background:#222;color:#eee;border:1px solid
 <button onclick="copyCoords()">Скопировать координаты</button>
 <button class="gray" onclick="testDisplay()">Тест экрана</button>
 <button class="gray" onclick="connectBle()">Подключить Bluetooth</button>
+<div class="card" style="margin-top:12px">
+<h3>Тестовый NMEA-генератор</h3>
+<div class="small">Передаёт координаты центра Сарова через TX GPIO8 (57600 бод). Подключите GPIO8 → GPS RX GPIO44 и общий GND.</div>
+<button onclick="startNmeaSimulator()">Включить имитацию</button>
+<button class="gray" onclick="stopNmeaSimulator()">Выключить</button>
+<div id="simulatorStatus" class="small">Имитатор выключен</div>
+</div>
 <div id="bleStatus" class="small"></div>
 </div>
 
@@ -452,6 +465,19 @@ document.getElementById('imuData').textContent='AX '+d.ax.toFixed(2)+' m/s2\nAY 
 }catch(e){}
 }
 
+async function startNmeaSimulator(){
+ try{
+  const r=await fetch('/simulator/start',{method:'POST'});
+  const d=await r.json();
+  document.getElementById('simulatorStatus').textContent=d.enabled?'Имитатор включён: Sarov, TX GPIO8 → RX GPIO44':'Не удалось включить имитатор';
+ }catch(e){document.getElementById('simulatorStatus').textContent='Ошибка запуска имитатора';}
+}
+async function stopNmeaSimulator(){
+ try{
+  await fetch('/simulator/stop',{method:'POST'});
+  document.getElementById('simulatorStatus').textContent='Имитатор выключен';
+ }catch(e){document.getElementById('simulatorStatus').textContent='Ошибка выключения имитатора';}
+}
 async function testDisplay(){
 await fetch('/display/test',{method:'POST'});
 }
@@ -557,6 +583,23 @@ void handleTile() {
   tile.close();
 }
 
+void handleSimulatorStart() {
+  nmeaSimulatorEnabled = true;
+  haveFix = false;
+  lat = 0.0; lng = 0.0; altitude = 0.0;
+  satellites = 0; satellitesVisible = 0; hdop = 0.0;
+  lastSimulatorSentenceMs = 0;
+  server.send(200, "application/json", "{\"ok\":true,\"enabled\":true}");
+}
+
+void handleSimulatorStop() {
+  nmeaSimulatorEnabled = false;
+  haveFix = false;
+  lat = 0.0; lng = 0.0; altitude = 0.0;
+  satellites = 0; satellitesVisible = 0; hdop = 0.0;
+  server.send(200, "application/json", "{\"ok\":true,\"enabled\":false}");
+}
+
 void handleDisplayTest() {
   startDisplayTest();
   server.send(200, "application/json", "{\"ok\":true}");
@@ -649,6 +692,8 @@ void setup() {
   }
 
   gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
+  simulatorSerial.begin(GPS_BAUD, SERIAL_8N1, 9, 8);
+  Serial.println("NMEA simulator UART1 ready: TX GPIO8, RX GPIO9, 57600 baud");
 
   SD_MMC.setPins(14, 15, 16, 18, 17, 21); // CLK, CMD, D0, D1, D2, D3
   if (SD_MMC.begin(SD_MOUNT, true)) {
@@ -667,6 +712,8 @@ void setup() {
   server.on("/maps", HTTP_GET, handleMaps);
   server.on("/tiles", HTTP_GET, handleTile);
   server.on("/display/test", HTTP_POST, handleDisplayTest);
+  server.on("/simulator/start", HTTP_POST, handleSimulatorStart);
+  server.on("/simulator/stop", HTTP_POST, handleSimulatorStop);
   server.on("/imu/calibrate", HTTP_POST, handleCalibrate);
   server.on("/imu/reset", HTTP_POST, handleResetCalibration);
   server.begin();
@@ -700,8 +747,35 @@ void setup() {
   Serial.println("BLE: ESP32-GNSS");
 }
 
+String nmeaWithChecksum(const String& payload) {
+  uint8_t checksum = 0;
+  for (size_t i = 0; i < payload.length(); i++) checksum ^= (uint8_t)payload[i];
+  char suffix[6];
+  snprintf(suffix, sizeof(suffix), "*%02X", checksum);
+  return "$" + payload + String(suffix) + "\r\n";
+}
+
+void sendNmeaSimulatorFrame() {
+  // Approximate city-centre coordinates: 54.9227 N, 43.3448 E.
+  static const char* sentences[] = {
+    "GPRMC,120000.00,A,5455.3620,N,04320.6880,E,0.0,0.0,141126,,,A",
+    "GPGGA,120000.00,5455.3620,N,04320.6880,E,1,08,0.9,125.0,M,0.0,M,,",
+    "GPGSA,A,3,01,02,03,04,05,06,07,08,,,,,1.2,0.9,0.8",
+    "GPGSV,2,1,08,01,45,120,40,02,35,230,38,03,25,310,36,04,60,050,42",
+    "GPGSV,2,2,08,05,30,180,39,06,20,270,35,07,50,020,41,08,15,330,32",
+    "GPVTG,0.0,T,,M,0.0,N,0.0,K,A",
+    "GPGLL,5455.3620,N,04320.6880,E,120000.00,A,A"
+  };
+  for (const char* sentence : sentences) simulatorSerial.print(nmeaWithChecksum(sentence));
+}
+
 void loop() {
   server.handleClient();
+
+  if (nmeaSimulatorEnabled && millis() - lastSimulatorSentenceMs >= 1000) {
+    lastSimulatorSentenceMs = millis();
+    sendNmeaSimulatorFrame();
+  }
 
   unsigned long now = millis();
   if (now - uartWindowStartMs >= 1000) {
