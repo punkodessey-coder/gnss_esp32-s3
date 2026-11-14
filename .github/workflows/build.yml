@@ -2,7 +2,7 @@ name: Build firmware
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/display-ble-imu]
   pull_request:
     branches: [main]
   workflow_dispatch:
