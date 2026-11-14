@@ -47,6 +47,11 @@ HardwareSerial gpsSerial(2);
 HardwareSerial simulatorSerial(1); // NMEA test output: TX GPIO8, RX GPIO9 (unused)
 int gpsBaud = GPS_BAUD;
 String savedPointsJson = "[]";
+String lastUbxFrameHex = "";
+String ubxLastEvent = "Ожидание UBX";
+uint8_t ubxFrame[256];
+size_t ubxFramePos = 0, ubxFrameLength = 0;
+
 TinyGPSPlus gps;
 bool nmeaSimulatorEnabled = false;
 unsigned long lastSimulatorSentenceMs = 0;
@@ -220,6 +225,48 @@ String coordsJson() {
   String out;
   serializeJson(doc, out);
   return out;
+}
+
+
+String bytesToHex(const uint8_t* data, size_t len) {
+  String out;
+  for (size_t i=0;i<len;i++) { if(i) out += ' '; char b[3]; snprintf(b,sizeof(b),"%02X",data[i]); out += b; }
+  return out;
+}
+bool parseHexPayload(const String& hex, uint8_t* out, size_t& len) {
+  len=0; int high=-1;
+  for(size_t i=0;i<hex.length();i++) {
+    char c=hex[i]; if(c==' '||c==','||c==':'||c=='\n'||c=='\r') continue;
+    int v=(c>='0'&&c<='9')?c-'0':(c>='A'&&c<='F')?c-'A'+10:(c>='a'&&c<='f')?c-'a'+10:-1;
+    if(v<0)return false;
+    if(high<0) high=v; else { if(len>=220)return false; out[len++]=(high<<4)|v; high=-1; }
+  }
+  return high<0;
+}
+void sendUbx(uint8_t cls,uint8_t id,const uint8_t* payload,size_t len) {
+  uint8_t a=0,b=0;
+  gpsSerial.write(0xB5); gpsSerial.write(0x62); gpsSerial.write(cls); gpsSerial.write(id);
+  uint8_t l1=len&0xFF,l2=(len>>8)&0xFF;
+  gpsSerial.write(l1);gpsSerial.write(l2);
+  a+=cls;b+=a;a+=id;b+=a;a+=l1;b+=a;a+=l2;b+=a;
+  for(size_t i=0;i<len;i++){gpsSerial.write(payload[i]);a+=payload[i];b+=a;}
+  gpsSerial.write(a);gpsSerial.write(b);
+}
+void processUbxByte(uint8_t c) {
+  if(ubxFramePos==0 && c!=0xB5)return;
+  if(ubxFramePos==1 && c!=0x62){ubxFramePos=(c==0xB5)?1:0;return;}
+  if(ubxFramePos<sizeof(ubxFrame)) ubxFrame[ubxFramePos++]=c; else {ubxFramePos=0;return;}
+  if(ubxFramePos==6){ubxFrameLength=(size_t)ubxFrame[4]|((size_t)ubxFrame[5]<<8);if(ubxFrameLength>248){ubxFramePos=0;return;}}
+  if(ubxFramePos>=8 && ubxFrameLength && ubxFramePos==ubxFrameLength+8){
+    uint8_t a=0,b=0;for(size_t i=2;i<ubxFramePos-2;i++){a+=ubxFrame[i];b+=a;}
+    if(a==ubxFrame[ubxFramePos-2]&&b==ubxFrame[ubxFramePos-1]){
+      lastUbxFrameHex=bytesToHex(ubxFrame,ubxFramePos);
+      uint8_t cls=ubxFrame[2],id=ubxFrame[3];
+      if(cls==0x05&&(id==0x01||id==0x00))ubxLastEvent=(id==1?"UBX ACK":"UBX NAK");
+      else ubxLastEvent="Ответ UBX "+String(cls,HEX)+":"+String(id,HEX);
+    }
+    ubxFramePos=0;ubxFrameLength=0;
+  }
 }
 
 String savedPointsResponse() {
@@ -651,6 +698,19 @@ void handleSetBaud() {
   gpsBaud = baud;
   simulatorSerial.updateBaudRate(baud);
   server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleUbxSend() {
+  uint8_t cls=(uint8_t)strtoul(server.arg("cls").c_str(),nullptr,16);
+  uint8_t id=(uint8_t)strtoul(server.arg("id").c_str(),nullptr,16);
+  uint8_t payload[220]; size_t len=0;
+  if(!parseHexPayload(server.arg("payload"),payload,len)){server.send(400,"application/json","{\"ok\":false}");return;}
+  ubxLastEvent="Команда отправлена"; sendUbx(cls,id,payload,len);
+  server.send(200,"application/json","{\"ok\":true}");
+}
+void handleUbxStatus() {
+  JsonDocument d; d["event"]=ubxLastEvent;d["frame"]=lastUbxFrameHex;
+  String out;serializeJson(d,out);server.send(200,"application/json",out);
 }
 
 void handleCoords() {
