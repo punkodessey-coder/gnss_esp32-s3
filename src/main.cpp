@@ -608,7 +608,7 @@ function payloadForPage(){
  if(ubxPage==='msg')return [parseInt(document.getElementById('msgClass').value,16),parseInt(document.getElementById('msgId').value,16),0,n('msgRate'),0,0,0,0];
  if(ubxPage==='prt'){let mode=0x000008D0,im=(ck('prtInUbx')?1:0)|(ck('prtInNmea')?2:0),om=(ck('prtOutUbx')?1:0)|(ck('prtOutNmea')?2:0);return [n('prtPort'),0,0,0,...u32(mode),...u32(n('prtBaud')),...u16(im),...u16(om),0,0,0,0];}
  if(ubxPage==='rate')return [...u16(n('rateMeas')),...u16(n('rateNav')),...u16(n('rateRef'))];
- if(ubxPage==='nav5'){let mask=0xFFFF, dyn=n('navFix'),fix=n('navFixMode');let p=[...u16(mask),dyn,fix,n('navMinElev')&255,0,...u16(n('navDrLimit')),...u32(n('navPAcc')),...u32(n('navTAcc')),...u16(0),...u16(0),...u32(0),...u32(0),0,0,0,0,0,0];return p.slice(0,36);}
+ if(ubxPage==='nav5'){let mask=0xFFFF,dyn=n('navFix'),fix=n('navFixMode');return [...u16(mask),dyn,fix,...u32(0),...u32(0),n('navMinElev')&255,n('navDrLimit')&255,...u16(0),...u16(0),...u16(n('navPAcc')),...u16(n('navTAcc')),0,0,0,0,0,0,0,0,0,0];}
  if(ubxPage==='sbas'){let mode=n('sbasMode'),usage=(ck('sbasRanging')?1:0)|(ck('sbasDiff')?2:0)|(ck('sbasIntegrity')?4:0);return [ck('sbasEnable')?1:0,mode,usage,n('sbasMax'),0,0,0,0];}
  if(ubxPage==='nmea'){let flags=(ck('nmeaCompat')?1:0)|(ck('nmeaConsider')?2:0)|(ck('nmeaLimit82')?4:0);return [n('nmeaVersion'),n('nmeaNumSV'),flags,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];}
  if(ubxPage==='cfg'){let clear=(ck('cfgClear')?0xFFFF:0),save=(ck('cfgBbr')?0x0001:0)|(ck('cfgFlash')?0x0002:0);return [...u32(clear),...u32(save),...u32(0)];}
@@ -633,7 +633,7 @@ function decodeUbxPage(frame){
  if(ubxPage==='msg'&&p.length>=8)set('msgRate',p[3]);
  if(ubxPage==='prt'&&p.length>=20){set('prtPort',p[0]);set('prtBaud',(p[8]|p[9]<<8|p[10]<<16|p[11]<<24)>>>0);check('prtInUbx',p[12]&1);check('prtInNmea',p[12]&2);check('prtOutUbx',p[14]&1);check('prtOutNmea',p[14]&2);}
  if(ubxPage==='rate'&&p.length>=6){set('rateMeas',p[0]|p[1]<<8);set('rateNav',p[2]|p[3]<<8);set('rateRef',p[4]|p[5]<<8);}
- if(ubxPage==='nav5'&&p.length>=36){set('navFix',p[2]);set('navFixMode',p[3]);set('navMinElev',p[4]);set('navDrLimit',p[ that]);}
+ if(ubxPage==='nav5'&&p.length>=36){set('navFix',p[2]);set('navFixMode',p[3]);set('navMinElev',p[14]);set('navDrLimit',p[15]);set('navPAcc',p[20]|p[21]<<8);set('navTAcc',p[22]|p[23]<<8);}
  if(ubxPage==='sbas'&&p.length>=8){check('sbasEnable',p[0]&1);set('sbasMode',p[1]);check('sbasRanging',p[2]&1);check('sbasDiff',p[2]&2);check('sbasIntegrity',p[2]&4);set('sbasMax',p[3]);}
  if(ubxPage==='nmea'&&p.length>=20){set('nmeaVersion',p[0]);set('nmeaNumSV',p[1]);check('nmeaCompat',p[2]&1);check('nmeaConsider',p[2]&2);check('nmeaLimit82',p[2]&4);}
 }
