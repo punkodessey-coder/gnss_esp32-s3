@@ -485,6 +485,8 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <button class="ubx-nav-item" data-page="prt" onclick="selectUbxPage('prt')">PRT — Ports</button>
 <button class="ubx-nav-item" data-page="rate" onclick="selectUbxPage('rate')">RATE — Rates</button>
 <button class="ubx-nav-item" data-page="tp5" onclick="selectUbxPage('tp5')">TP5 — Timepulse</button>
+<button class="ubx-nav-item" data-page="sbas" onclick="selectUbxPage('sbas')">SBAS — Augmentation</button>
+<button class="ubx-nav-item" data-page="cfg" onclick="selectUbxPage('cfg')">CFG — Save/Load</button>
 </nav>
 <section class="ubx-panel">
 <h3 id="ubxPageTitle">MSG — Message rates</h3>
@@ -707,7 +709,9 @@ const ubxPageInfo={
   nav5:{title:'NAV5 — Navigation engine settings',id:0x24},
   prt:{title:'PRT — UART port configuration',id:0x00},
   rate:{title:'RATE — Measurement and navigation rate',id:0x08},
-  tp5:{title:'TP5 — Timepulse configuration',id:0x31}
+  tp5:{title:'TP5 — Timepulse configuration',id:0x31},
+  sbas:{title:'SBAS — Satellite Based Augmentation',id:0x16},
+  cfg:{title:'CFG — Save/Load receiver configuration',id:0x09}
 };
 function field(id,label,value,type='number',extra=''){return '<div class="ubx-field"><label for="'+id+'">'+label+'</label><input id="'+id+'" type="'+type+'" value="'+value+'" '+extra+'></div>';}
 function selectField(id,label,value,options){return '<div class="ubx-field"><label for="'+id+'">'+label+'</label><select id="'+id+'">'+options.map(o=>'<option value="'+o[0]+'" '+(String(value)===String(o[0])?'selected':'')+'>'+o[1]+'</option>').join('')+'</select></div>';}
@@ -733,8 +737,12 @@ function selectUbxPage(page){
   if(page==='msg'){
     f.innerHTML=selectField('msgClass','Класс сообщения','F0',[['F0','NMEA standard (F0)'],['F1','NMEA proprietary (F1)'],['01','NAV (01)'],['02','RXM (02)'],['0A','MON (0A)']])+
       selectField('msgId','Сообщение','00',[['00','GGA — Fix data'],['01','GLL — Geographic position'],['02','GSA — DOP and active satellites'],['03','GSV — Satellites in view'],['04','RMC — Recommended minimum'],['05','VTG — Course and speed'],['08','ZDA — Time and date']])+
-      selectField('msgRate','Частота UART1','1',[['0','0 — выключено'],['1','1 — каждое решение'],['2','2 — каждое второе'],['5','5 — каждое пятое']])+
-      '<p class="small">Для u-blox 6 CFG-MSG использует 3-байтовый Set: класс, ID и частота на том порту, по которому отправлена команда (здесь UART1).</p>';
+      selectField('msgI2c','Частота DDC/I²C','0',[['0','0 — выключено'],['1','1 — каждое решение'],['2','2 — каждое второе'],['5','5 — каждое пятое']])+
+      selectField('msgUart1','Частота UART1','1',[['0','0 — выключено'],['1','1 — каждое решение'],['2','2 — каждое второе'],['5','5 — каждое пятое']])+
+      selectField('msgUart2','Частота UART2','0',[['0','0 — выключено'],['1','1 — каждое решение'],['2','2 — каждое второе'],['5','5 — каждое пятое']])+
+      selectField('msgUsb','Частота USB','0',[['0','0 — выключено'],['1','1 — каждое решение'],['2','2 — каждое второе'],['5','5 — каждое пятое']])+
+      selectField('msgSpi','Частота SPI','0',[['0','0 — выключено'],['1','1 — каждое решение'],['2','2 — каждое второе'],['5','5 — каждое пятое']])+
+      '<p class="small">CFG-MSG u-blox 6: Poll = 2 байта (класс, ID); Set = 8 байт (класс, ID, reserved, DDC, UART1, UART2, USB, SPI).</p>';
   }
   if(page==='nav5'){
     f.innerHTML=selectField('navDyn','Dynamic platform model',0,[[0,'Portable'],[2,'Stationary'],[3,'Pedestrian'],[4,'Automotive'],[5,'Sea'],[6,'Airborne <1g'],[7,'Airborne <2g'],[8,'Airborne <4g']])+
@@ -752,7 +760,7 @@ function selectUbxPage(page){
       '<p class="small">CFG-NAV5: fixed altitude передаётся с масштабом 0,01 м; DOP — 0,1. DGPS timeout зависит от версии firmware.</p>';
   }
   if(page==='prt'){
-    f.innerHTML=selectField('prtPort','Порт','1',[['1','UART1'],['2','UART2']])+
+    f.innerHTML=selectField('prtPort','Порт','1',[['0','DDC / I²C'],['1','UART1'],['2','UART2'],['3','USB'],['4','SPI']])+
       field('prtBaud','Baud rate',57600)+
       selectField('prtDataBits','Data bits',8,[[7,'7'],[8,'8']])+
       selectField('prtParity','Parity','none',[['none','None'],['even','Even'],['odd','Odd']])+
@@ -767,6 +775,22 @@ function selectUbxPage(page){
       field('rateNav','Navigation rate (cycles)',1,'number','disabled')+
       selectField('rateRef','Time reference',1,[[0,'UTC'],[1,'GPS']])+
       '<p class="small">Для u-blox 6 navigation rate фиксирован равным 1 и не изменяется. 1000 мс соответствует 1 Гц.</p>';
+  }
+  if(page==='sbas'){
+    f.innerHTML=checkField('gnssSbasEnable','SBAS enabled',true)+
+      checkField('gnssSbasTest','Test mode',false)+
+      checkField('gnssSbasRange','Use SBAS ranging',true)+
+      checkField('gnssSbasDiff','Use differential corrections',true)+
+      checkField('gnssSbasIntegrity','Use integrity',true)+
+      field('gnssSbasMax','Maximum SBAS channels (0–3)',3)+
+      field('gnssSbasScan','SBAS scan mask (0 = automatic)',0,'number','min="0" max="4294967295"');
+  }
+  if(page==='cfg'){
+    f.innerHTML='<p>CFG-CFG — управление сохранением конфигурации в энергонезависимой памяти приёмника.</p>'+
+      checkField('cfgBbr','Сохранить в BBR',true)+
+      checkField('cfgFlash','Сохранить во Flash',true)+
+      checkField('cfgClear','Очистить перед сохранением',false)+
+      '<p class="small">Очистка конфигурации выполняется только при нажатии «Записать». Используйте Flash только если она предусмотрена платой приёмника.</p>';
   }
   if(page==='tp5'){
     f.innerHTML=selectField('tpIdx','Timepulse output',0,[[0,'TIMEPULSE'],[1,'TIMEPULSE2']])+
@@ -796,7 +820,7 @@ function payloadForPage(){
     const prn=Math.max(0,Math.min(0xFFFFFFFF,n('gnssSbasScan')))>>>0;
     return [mode,usage,Math.max(0,Math.min(3,n('gnssSbasMax'))),0,...u32(prn)];
   }
-  if(ubxPage==='msg')return [parseInt(document.getElementById('msgClass').value,16),parseInt(document.getElementById('msgId').value,16),n('msgRate')];
+  if(ubxPage==='msg')return [parseInt(document.getElementById('msgClass').value,16),parseInt(document.getElementById('msgId').value,16),0,n('msgI2c'),n('msgUart1'),n('msgUart2'),n('msgUsb'),n('msgSpi')];
   if(ubxPage==='prt'){
     const port=n('prtPort'),baud=n('prtBaud');
     const dataBits=n('prtDataBits')===7?2:3;
@@ -810,12 +834,23 @@ function payloadForPage(){
   }
   if(ubxPage==='rate')return [...u16(n('rateMeas')),...u16(1),...u16(n('rateRef'))];
   if(ubxPage==='nav5'){
-    const mask=0x00FF;
+    const mask=0x0FFF;
     const fixedAlt=Math.round(n('navFixedAlt')*100);
     const fixedAltVar=Math.max(0,Math.round(n('navFixedAltVar')*10000));
     const pDop=Math.max(0,Math.round(n('navPDop')*10));
     const tDop=Math.max(0,Math.round(n('navTDop')*10));
     return [...u16(mask),n('navDyn'),n('navFixMode'),...u32(fixedAlt),...u32(fixedAltVar),n('navMinElev')&255,n('navDrLimit')&255,...u16(pDop),...u16(tDop),...u16(n('navPAcc')),...u16(n('navTAcc')),n('navStaticHold')&255,n('navDgpsTimeout')&255,0,0,0,0,0,0,0,0,0,0,0,0];
+  }
+  if(ubxPage==='sbas'){
+    const mode=(ck('gnssSbasEnable')?1:0)|(ck('gnssSbasTest')?2:0);
+    const usage=(ck('gnssSbasRange')?1:0)|(ck('gnssSbasDiff')?2:0)|(ck('gnssSbasIntegrity')?4:0);
+    const prn=Math.max(0,Math.min(0xFFFFFFFF,n('gnssSbasScan')))>>>0;
+    return [mode,usage,Math.max(0,Math.min(3,n('gnssSbasMax'))),0,...u32(prn)];
+  }
+  if(ubxPage==='cfg'){
+    const clear=ck('cfgClear')?0xFFFFFFFF:0;
+    const save=(ck('cfgBbr')?1:0)|(ck('cfgFlash')?2:0);
+    return [...u32(clear),...u32(save),...u32(0)];
   }
   if(ubxPage==='tp5'){
     const flags=(ck('tpActive')?1:0)|(ck('tpLockGps')?2:0)|(ck('tpLockedOther')?4:0)|(ck('tpIsFreq')?8:0)|(ck('tpIsLength')?16:0)|(ck('tpAlign')?32:0)|(ck('tpPolarity')?64:0)|(Number(document.getElementById('tpGrid').value)?128:0);
@@ -832,6 +867,7 @@ async function pollUbxPage(){
   if(ubxPage==='msg')q=[parseInt(document.getElementById('msgClass').value,16),parseInt(document.getElementById('msgId').value,16)];
   if(ubxPage==='prt')q=[Number(document.getElementById('prtPort').value)];
   if(ubxPage==='tp5')q=[Number(document.getElementById('tpIdx').value)];
+  if(ubxPage==='sbas'||ubxPage==='cfg')q=[];
   const r=await sendUbxPacket(ubxPageInfo[ubxPage].id,q);
   document.getElementById('ubxStatus').textContent=r.ok?'Poll отправлен. Ожидаю ответ приёмника…':'Ошибка Poll';
   setTimeout(refreshUbxStatus,350);
@@ -846,12 +882,12 @@ function decodeUbxPage(frame){
   if(frame.cls!==6||frame.id!==ubxPageInfo[ubxPage].id)return;
   const set=(id,v)=>{const e=document.getElementById(id);if(e)e.value=v;};
   const check=(id,v)=>{const e=document.getElementById(id);if(e)e.checked=!!v;};
-  if(ubxPage==='gnss'&&p.length>=8){
+  if((ubxPage==='gnss'||ubxPage==='sbas')&&p.length>=8){
     check('gnssSbasEnable',p[0]&1);check('gnssSbasTest',p[0]&2);
     check('gnssSbasRange',p[1]&1);check('gnssSbasDiff',p[1]&2);check('gnssSbasIntegrity',p[1]&4);
     set('gnssSbasMax',p[2]);set('gnssSbasScan',readU32(p,4));
   }
-  if(ubxPage==='msg'&&p.length>=3)set('msgRate',p[2]);
+  if(ubxPage==='msg'&&p.length>=8){set('msgI2c',p[3]);set('msgUart1',p[4]);set('msgUart2',p[5]);set('msgUsb',p[6]);set('msgSpi',p[7]);}
   if(ubxPage==='prt'&&p.length>=20){
     set('prtPort',p[0]);set('prtBaud',readU32(p,8));
     const mode=readU32(p,4),bits=(mode>>6)&3,parity=(mode>>9)&7,stop=(mode>>12)&3;
@@ -866,6 +902,10 @@ function decodeUbxPage(frame){
     set('navFixedAltVar',readU32(p,8)/10000);set('navMinElev',p[12]);set('navDrLimit',p[13]);
     set('navPDop',readU16(p,14)/10);set('navTDop',readU16(p,16)/10);
     set('navPAcc',readU16(p,18));set('navTAcc',readU16(p,20));set('navStaticHold',p[22]);set('navDgpsTimeout',p[23]);
+  }
+  if(ubxPage==='cfg'&&p.length>=12){
+    const save=readU32(p,4),clear=readU32(p,0);
+    check('cfgBbr',save&1);check('cfgFlash',save&2);check('cfgClear',clear!==0);
   }
   if(ubxPage==='tp5'&&p.length>=32){
     set('tpIdx',p[0]);set('tpAntDelay',(p[4]|p[5]<<8)<<16>>16);set('tpRfDelay',(p[6]|p[7]<<8)<<16>>16);
