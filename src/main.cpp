@@ -65,10 +65,16 @@ bool haveFix = false;
 double lat = 0.0;
 double lng = 0.0;
 double altitude = 0.0;
-int satellites = 0; // satellites used in fix
-int satellitesVisible = 0; // satellites in view from GSV, even without fix
+int satellites = 0; // satellites used by a valid GGA fix
+int satellitesVisible = 0; // satellites reported by GSV
 double hdop = 0.0;
 unsigned long lastFixMs = 0;
+unsigned long lastGgaMs = 0;
+unsigned long lastGsvMs = 0;
+uint8_t fixTimeoutSeconds = 7;
+unsigned long simulatorStartMs = 0;
+double simulatorLat = 54.922700;
+double simulatorLng = 43.344800;
 unsigned long uartLastByteMs = 0, uartWindowStartMs = 0, uartBytesWindow = 0;
 unsigned long uartBytesPerSecond = 0, uartTotalBytes = 0, uartInvalidSentences = 0;
 String uartCurrentLine, uartLastLine, uartRecentLines;
@@ -219,6 +225,7 @@ String coordsJson() {
   doc["alt"] = altitude;
   doc["sat"] = satellites;
   doc["sat_visible"] = satellitesVisible;
+  doc["fix_timeout_s"] = fixTimeoutSeconds;
   doc["hdop"] = hdop;
   doc["age_ms"] = haveFix ? (long)(millis() - lastFixMs) : -1;
 
@@ -266,6 +273,44 @@ void processUbxByte(uint8_t c) {
       else ubxLastEvent="Ответ UBX "+String(cls,HEX)+":"+String(id,HEX);
     }
     ubxFramePos=0;ubxFrameLength=0;
+  }
+}
+
+String nmeaField(const String& line, uint8_t fieldIndex) {
+  int start = 0;
+  uint8_t index = 0;
+  for (int i = 0; i <= (int)line.length(); i++) {
+    if (i == (int)line.length() || line[i] == ',' || line[i] == '*') {
+      if (index == fieldIndex) return line.substring(start, i);
+      index++;
+      start = i + 1;
+    }
+  }
+  return "";
+}
+
+bool validNmeaChecksum(const String& line) {
+  int star = line.indexOf('*');
+  if (star < 0) return true; // Some receivers can be configured without checksums.
+  uint8_t checksum = 0;
+  for (int i = 1; i < star; i++) checksum ^= (uint8_t)line[i];
+  if (star + 2 >= (int)line.length()) return false;
+  char expected[3] = { line[star + 1], line[star + 2], 0 };
+  return checksum == (uint8_t)strtoul(expected, nullptr, 16);
+}
+
+void processNmeaLine(const String& line) {
+  if (line.length() < 7 || line[0] != '$' || !validNmeaChecksum(line)) return;
+  String type = line.substring(3, 6);
+  if (type == "GGA") {
+    const int fixQuality = nmeaField(line, 6).toInt();
+    const int used = nmeaField(line, 7).toInt();
+    satellites = (fixQuality > 0) ? constrain(used, 0, 99) : 0;
+    lastGgaMs = millis();
+  } else if (type == "GSV") {
+    const int visible = nmeaField(line, 3).toInt();
+    satellitesVisible = constrain(visible, 0, 99);
+    lastGsvMs = millis();
   }
 }
 
@@ -380,7 +425,8 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <div id="status" class="small">Ожидание данных…</div>
 <div class="metric"><span>Широта</span><strong id="latValue">0.000000</strong></div>
 <div class="metric"><span>Долгота</span><strong id="lngValue">0.000000</strong></div>
-<div class="metric"><span>Спутников видно</span><strong id="satValue">0</strong></div>
+<div class="metric"><span>Используется в решении</span><strong id="satValue">0</strong></div>
+<div class="metric"><span>Видно по GSV</span><strong id="satVisibleValue">0</strong></div>
 <div class="coords" id="coords">0.000000, 0.000000</div>
 <button onclick="copyCoords()">Скопировать координаты</button>
 <button class="gray" onclick="saveCurrentPoint()">Сохранить текущую точку</button>
@@ -389,7 +435,7 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <button class="gray" onclick="connectBle()">Подключить Bluetooth</button>
 <div class="card" style="margin-top:12px">
 <h3>Тестовый NMEA-генератор</h3>
-<div class="small">Передаёт координаты центра Сарова через TX GPIO8 (57600 бод). Подключите GPIO8 → GPS RX GPIO44 и общий GND.</div>
+<div class="small">Имитирует движение по замкнутому маршруту в центре Сарова: один полный круг за 60 секунд. NMEA выходит через TX GPIO8 (57600 бод); для физического loopback подключите GPIO8 → GPS RX GPIO44 и общий GND.</div>
 <button onclick="startNmeaSimulator()">Включить имитацию</button>
 <button class="gray" onclick="stopNmeaSimulator()">Выключить</button>
 <div id="simulatorStatus" class="small">Имитатор выключен</div>
@@ -399,13 +445,17 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 
 <div class="card">
 <h2>Карта</h2>
-<div class="small">По умолчанию используется онлайн-карта. При наличии microSD можно выбрать сохранённую карту.</div>
+<div class="small">Онлайн-карты требуют интернет на телефоне/ноутбуке. Яндекс Гибрид подключается через официальный JavaScript API и требует API-ключ.</div>
 <select id="mapSelect">
 <option value="online:osm">OpenStreetMap — онлайн</option>
 <option value="online:esri">Esri Satellite — онлайн</option>
 <option value="online:topo">OpenTopoMap — онлайн</option>
-<option value="online:yandex">Яндекс Спутник — онлайн</option>
+<option value="online:yandex">Яндекс — гибрид</option>
 </select>
+<div class="ubx-field"><label for="yandexApiKey">API-ключ Яндекс.Карт</label><input id="yandexApiKey" type="password" autocomplete="off" placeholder="Вставьте API-ключ"></div>
+<button class="gray" onclick="saveYandexKey()">Сохранить ключ</button>
+<div class="ubx-field"><label for="fixTimeoutSeconds">Скрывать точку после потери координат (сек.)</label><input id="fixTimeoutSeconds" type="number" min="1" max="60" value="7"></div>
+<button class="gray" onclick="saveFixTimeout()">Сохранить тайм-аут</button>
 <div id="mapStatus" class="small">Загрузка списка офлайн-карт…</div>
 </div>
 
@@ -425,16 +475,15 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 </div></div>
 <div id="ubxTab" class="hidden">
 <div class="card"><h2>u-blox — Configuration View</h2>
-<div class="small">Профили классического протокола UBX-CFG для NEO-6M. Выберите раздел слева, нажмите «Считать» для загрузки текущих параметров, измените поля и нажмите «Записать». Набор разделов зависит от поколения приёмника; CFG-VALSET здесь не используется.</div>
+<div class="small">Configuration View для u-blox 6 / NEO-6M. Поля и длины UBX-CFG пакетов соответствуют протоколу u-blox 6. GNSS: NEO-6M — GPS-приёмник; CFG-GNSS у этого поколения отсутствует, поэтому доступен статус GPS и настройка SBAS. «Считать» отправляет Poll, «Записать» — корректный Set.</div>
 <div class="ubx-layout">
 <nav id="ubxNav" class="ubx-nav">
-<button class="ubx-nav-item active" data-page="msg" onclick="selectUbxPage('msg')">MSG — Messages</button>
+<button class="ubx-nav-item active" data-page="gnss" onclick="selectUbxPage('gnss')">GNSS — Systems</button>
+<button class="ubx-nav-item" data-page="msg" onclick="selectUbxPage('msg')">MSG — Messages</button>
+<button class="ubx-nav-item" data-page="nav5" onclick="selectUbxPage('nav5')">NAV5 — Navigation</button>
 <button class="ubx-nav-item" data-page="prt" onclick="selectUbxPage('prt')">PRT — Ports</button>
 <button class="ubx-nav-item" data-page="rate" onclick="selectUbxPage('rate')">RATE — Rates</button>
-<button class="ubx-nav-item" data-page="nav5" onclick="selectUbxPage('nav5')">NAV5 — Navigation</button>
-<button class="ubx-nav-item" data-page="sbas" onclick="selectUbxPage('sbas')">SBAS</button>
-<button class="ubx-nav-item" data-page="nmea" onclick="selectUbxPage('nmea')">NMEA</button>
-<button class="ubx-nav-item" data-page="cfg" onclick="selectUbxPage('cfg')">CFG — Save config</button>
+<button class="ubx-nav-item" data-page="tp5" onclick="selectUbxPage('tp5')">TP5 — Timepulse</button>
 </nav>
 <section class="ubx-panel">
 <h3 id="ubxPageTitle">MSG — Message rates</h3>
@@ -454,6 +503,9 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <script>
 let currentMap='';
 let tileLayer=null;
+let map=null, gpsMarker=null, currentFix=false;
+let currentLat=54.9227,currentLng=43.3448;
+let yandexMap=null,yandexCircle=null,yandexApiKey='';
 
 function showTab(name){
 document.getElementById('gpsTab').classList.toggle('hidden',name!=='gps');
@@ -466,58 +518,126 @@ document.getElementById('tabImuBtn').classList.toggle('active',name==='imu');
 document.getElementById('tabUartBtn').classList.toggle('active',name==='uart');
 document.getElementById('tabUbxBtn').classList.toggle('active',name==='ubx');
 document.getElementById('tabPointsBtn').classList.toggle('active',name==='points');
-if(name==='gps' && map) setTimeout(()=>map.invalidateSize(),150); if(name==='ubx' && !document.getElementById('ubxFields').children.length) selectUbxPage('msg');
+if(name==='gps'){
+  if(map) setTimeout(()=>map.invalidateSize(),150);
+  if(yandexMap) setTimeout(()=>yandexMap.container.fitToViewport(),150);
+}
+if(name==='ubx' && !document.getElementById('ubxFields').children.length) selectUbxPage('gnss');
 }
 
-let map=null, gpsMarker=null, currentFix=false;
 function initMap(){
-  if(typeof L==='undefined'){document.getElementById('mapStatus').textContent='Leaflet не загрузилась — проверьте интернет и обновите страницу';return false;}
-  if(!map){map=L.map('map').setView([59.9386,30.3141],11);}
+  if(typeof L==='undefined'){document.getElementById('mapStatus').textContent='Leaflet не загрузилась — проверьте доступ к интернету';return false;}
+  if(!map) map=L.map('map').setView([54.9227,43.3448],15);
   return true;
 }
-
+async function loadYandexKey(){
+  try{
+    const d=await (await fetch('/maps/yandex-key')).json();
+    yandexApiKey=d.key||'';
+    if(yandexApiKey) document.getElementById('yandexApiKey').value=yandexApiKey;
+  }catch(e){}
+}
+async function saveYandexKey(){
+  const key=document.getElementById('yandexApiKey').value.trim();
+  try{
+    const r=await fetch('/maps/yandex-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key})});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    yandexApiKey=key;
+    document.getElementById('mapStatus').textContent=key?'Ключ сохранён. Загружаю Яндекс Гибрид…':'Ключ удалён';
+    if(key) await selectMap('online:yandex');
+  }catch(e){document.getElementById('mapStatus').textContent='Не удалось сохранить ключ Яндекса: '+e.message;}
+}
+async function loadYandexApi(){
+  if(window.ymaps) { await new Promise(resolve=>window.ymaps.ready(resolve)); return; }
+  if(!window.__yandexMapsPromise){
+    window.__yandexMapsPromise=new Promise((resolve,reject)=>{
+      const script=document.createElement('script');
+      script.src='https://api-maps.yandex.ru/2.1/?apikey='+encodeURIComponent(yandexApiKey)+'&lang=ru_RU';
+      script.onload=()=>resolve();
+      script.onerror=()=>reject(new Error('Не удалось загрузить JavaScript API Яндекса'));
+      document.head.appendChild(script);
+    });
+  }
+  await window.__yandexMapsPromise;
+  await new Promise(resolve=>window.ymaps.ready(resolve));
+}
 async function loadMaps(){
   const select=document.getElementById('mapSelect');
   try{
     const d=await (await fetch('/maps')).json();
     if(d.maps && d.maps.length){
-      const group=document.createElement('optgroup');
-      group.label='Офлайн-карты microSD';
-      d.maps.forEach(name=>{
-        const option=document.createElement('option');
-        option.value='sd:'+name;
-        option.textContent=name;
-        group.appendChild(option);
-      });
+      const group=document.createElement('optgroup'); group.label='Офлайн-карты microSD';
+      d.maps.forEach(name=>{const option=document.createElement('option');option.value='sd:'+name;option.textContent=name;group.appendChild(option);});
       select.appendChild(group);
       document.getElementById('mapStatus').textContent='Найдено офлайн-карт: '+d.maps.length;
-    }else{
-      document.getElementById('mapStatus').textContent='На microSD нет карт в каталоге /maps';
-    }
-  }catch(e){
-    document.getElementById('mapStatus').textContent='microSD недоступна; онлайн-карты доступны при наличии интернета';
-  }
-  if(initMap()) selectMap('online:osm');
+    }else document.getElementById('mapStatus').textContent='На microSD нет карт в каталоге /maps';
+  }catch(e){document.getElementById('mapStatus').textContent='microSD недоступна; онлайн-карты требуют интернет на клиентском устройстве';}
+  await loadYandexKey();
+  selectMap('online:osm');
 }
-function selectMap(value){
-  if(!initMap()) return;
-  if(tileLayer){map.removeLayer(tileLayer);tileLayer=null;}
+async function selectMap(value){
+  currentMap=value;
+  if(tileLayer && map){map.removeLayer(tileLayer);tileLayer=null;}
+  if(yandexMap){yandexMap.destroy();yandexMap=null;yandexCircle=null;}
+  if(value==='online:yandex'){
+    if(!yandexApiKey){document.getElementById('mapStatus').textContent='Для Яндекс Гибрид нужен API-ключ. Введите его выше и нажмите «Сохранить ключ».';return;}
+    if(map){map.remove();map=null;gpsMarker=null;}
+    try{
+      await loadYandexApi();
+      yandexMap=new ymaps.Map('map',{center:currentFix?[currentLat,currentLng]:[54.9227,43.3448],zoom:16,controls:['zoomControl']});
+      yandexMap.setType('yandex#hybrid');
+      if(currentFix) updateYandexPoint(currentLat,currentLng);
+      document.getElementById('mapStatus').textContent='Яндекс Гибрид загружен';
+    }catch(e){document.getElementById('mapStatus').textContent='Ошибка Яндекс.Карт: '+e.message;}
+    return;
+  }
+  if(map){map.remove();map=null;gpsMarker=null;}
+  if(!initMap())return;
   if(value==='online:osm'){
     tileLayer=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'});
   }else if(value==='online:esri'){
     tileLayer=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Tiles &copy; Esri'});
   }else if(value==='online:topo'){
     tileLayer=L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',{maxZoom:17,attribution:'&copy; OpenTopoMap'});
-  }else if(value==='online:yandex'){
-    tileLayer=L.tileLayer('https://tiles.maps.yandex.net/tiles?l=sat&x={x}&y={y}&z={z}&scale=1&lang=ru_RU',{maxZoom:19,attribution:'&copy; Яндекс'});
   }else if(value.startsWith('sd:')){
     const name=value.substring(3);
     tileLayer=L.tileLayer('/tiles?map='+encodeURIComponent(name)+'&z={z}&x={x}&y={y}',{maxZoom:19,minZoom:3,attribution:'Offline map'});
   }
   if(tileLayer)tileLayer.addTo(map);
+  if(currentFix) updateLeafletPoint(currentLat,currentLng);
   document.getElementById('mapStatus').textContent=value.startsWith('sd:')?'Офлайн-карта: '+value.substring(3):'Онлайн-карта: '+value.substring(7).toUpperCase();
 }
-async function refreshSavedPoints(){
+function updateLeafletPoint(lat,lng){
+  if(!map)return;
+  if(!gpsMarker){
+    gpsMarker=L.circleMarker([lat,lng],{radius:6,color:'#ffffff',weight:2,fillColor:'#1677ff',fillOpacity:1}).addTo(map);
+    map.setView([lat,lng],16);
+  }else gpsMarker.setLatLng([lat,lng]);
+}
+function updateYandexPoint(lat,lng){
+  if(!yandexMap)return;
+  const coords=[lat,lng];
+  if(!yandexCircle){
+    yandexCircle=new ymaps.Circle([coords,5],{}, {fillColor:'#1677ffCC',strokeColor:'#ffffff',strokeWidth:2});
+    yandexMap.geoObjects.add(yandexCircle);
+    yandexMap.setCenter(coords,16);
+  }else yandexCircle.geometry.setCoordinates(coords);
+}
+function removeCurrentMapPoint(){
+  if(gpsMarker && map){map.removeLayer(gpsMarker);gpsMarker=null;}
+  if(yandexCircle && yandexMap){yandexMap.geoObjects.remove(yandexCircle);yandexCircle=null;}
+}
+async function saveFixTimeout(){
+  const input=document.getElementById('fixTimeoutSeconds');
+  const seconds=Number(input.value);
+  if(!Number.isInteger(seconds)||seconds<1||seconds>60){alert('Укажите от 1 до 60 секунд');return;}
+  try{
+    const r=await fetch('/settings/fix-timeout?seconds='+seconds,{method:'POST'});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    document.getElementById('mapStatus').textContent='Тайм-аут потери координат: '+seconds+' с';
+  }catch(e){document.getElementById('mapStatus').textContent='Не удалось сохранить тайм-аут: '+e.message;}
+}
+async function refreshSavedPoints(){async function refreshSavedPoints(){
  try{
   const points=await (await fetch('/points')).json();
   const list=document.getElementById('savedPointsList');
@@ -550,98 +670,224 @@ async function deletePoint(id){
 
 async function refreshGps(){
 try{
-const d=await (await fetch('/coords')).json();
-const lat=d.valid?Number(d.lat):0;
-const lng=d.valid?Number(d.lng):0;
-const text=lat.toFixed(6)+', '+lng.toFixed(6);
-document.getElementById('latValue').textContent=lat.toFixed(6);
-document.getElementById('lngValue').textContent=lng.toFixed(6);
-document.getElementById('satValue').textContent=String(d.sat_visible??0);
-document.getElementById('coords').textContent=text;
-currentFix=!!d.valid;
-if(!d.valid){
- document.getElementById('status').textContent='Нет фикса — отображаются нулевые координаты';
- if(gpsMarker && map){map.removeLayer(gpsMarker);gpsMarker=null;}
- return;
-}
-document.getElementById('status').textContent='Видно: '+(d.sat_visible??0)+' | используется: '+d.sat+' | HDOP: '+d.hdop+' | обновлено '+Math.round(d.age_ms/1000)+' с назад';
-if(initMap()){if(!gpsMarker){gpsMarker=L.marker([d.lat,d.lng]).addTo(map);map.setView([d.lat,d.lng],16);}else{gpsMarker.setLatLng([d.lat,d.lng]);}}
+  const d=await (await fetch('/coords?ts='+Date.now())).json();
+  const lat=d.valid?Number(d.lat):0;
+  const lng=d.valid?Number(d.lng):0;
+  document.getElementById('latValue').textContent=lat.toFixed(6);
+  document.getElementById('lngValue').textContent=lng.toFixed(6);
+  document.getElementById('satValue').textContent=String(d.sat??0);
+  document.getElementById('satVisibleValue').textContent=String(d.sat_visible??0);
+  document.getElementById('coords').textContent=lat.toFixed(6)+', '+lng.toFixed(6);
+  currentFix=!!d.valid;
+  if(d.fix_timeout_s && document.activeElement!==document.getElementById('fixTimeoutSeconds')){
+    document.getElementById('fixTimeoutSeconds').value=d.fix_timeout_s;
+  }
+  if(!d.valid){
+    document.getElementById('status').textContent='Нет актуального фикса';
+    removeCurrentMapPoint();
+    return;
+  }
+  currentLat=lat; currentLng=lng;
+  document.getElementById('status').textContent='Используется: '+(d.sat??0)+' | видно: '+(d.sat_visible??0)+' | HDOP: '+d.hdop+' | обновлено '+Math.round(d.age_ms/1000)+' с назад';
+  if(yandexMap) updateYandexPoint(lat,lng);
+  else if(map) updateLeafletPoint(lat,lng);
 }catch(e){}
 }
-
-async function changeUartBaud(value){
+async function changeUartBaud(value){async function changeUartBaud(value){
  const r=await fetch('/uart/baud?baud='+encodeURIComponent(value),{method:'POST'});
  document.getElementById('uartStatus').textContent=r.ok?'Скорость UART изменена на '+value+' бод':'Не удалось изменить скорость UART';
  refreshUart();
 }
 
-let ubxPage='msg',ubxLastFrame='';
+let ubxPage='gnss',ubxLastFrame='';
 const ubxPageInfo={
-msg:{title:'MSG — Rates of individual messages',cls:6,id:1},
-prt:{title:'PRT — Port configuration (UART1)',cls:6,id:0},
-rate:{title:'RATE — Measurement and navigation rate',cls:6,id:8},
-nav5:{title:'NAV5 — Navigation engine settings',cls:6,id:36},
-sbas:{title:'SBAS — Satellite Based Augmentation',cls:6,id:22},
-nmea:{title:'NMEA — NMEA protocol settings',cls:6,id:23},
-cfg:{title:'CFG — Save current configuration',cls:6,id:9}
+  gnss:{title:'GNSS — GPS / SBAS configuration',id:0x16},
+  msg:{title:'MSG — Message output rate',id:0x01},
+  nav5:{title:'NAV5 — Navigation engine settings',id:0x24},
+  prt:{title:'PRT — UART port configuration',id:0x00},
+  rate:{title:'RATE — Measurement and navigation rate',id:0x08},
+  tp5:{title:'TP5 — Timepulse configuration',id:0x31}
 };
 function field(id,label,value,type='number',extra=''){return '<div class="ubx-field"><label for="'+id+'">'+label+'</label><input id="'+id+'" type="'+type+'" value="'+value+'" '+extra+'></div>';}
 function selectField(id,label,value,options){return '<div class="ubx-field"><label for="'+id+'">'+label+'</label><select id="'+id+'">'+options.map(o=>'<option value="'+o[0]+'" '+(String(value)===String(o[0])?'selected':'')+'>'+o[1]+'</option>').join('')+'</select></div>';}
 function checkField(id,label,checked){return '<div class="ubx-field"><label>'+label+'</label><label><input id="'+id+'" type="checkbox" '+(checked?'checked':'')+'> Включено</label></div>';}
 function selectUbxPage(page){
- ubxPage=page;document.querySelectorAll('.ubx-nav-item').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
- document.getElementById('ubxPageTitle').textContent=ubxPageInfo[page].title;
- const f=document.getElementById('ubxFields');
- if(page==='msg')f.innerHTML=selectField('msgClass','Класс сообщения',['F0','F1','01','02'].includes('F0')?'F0':'F0',[['F0','NMEA standard'],['F1','NMEA proprietary'],['01','NAV'],['02','RXM']])+selectField('msgId','Сообщение (ID)','00',[['00','GGA — Fix data'],['01','GLL — Geographic position'],['02','GSA — DOP and active satellites'],['03','GSV — Satellites in view'],['04','RMC — Recommended minimum'],['05','VTG — Course and speed'],['08','ZDA — Time and date']])+selectField('msgRate','Частота на UART1','1',[['0','Выключено'],['1','Каждое решение'],['2','Каждое второе'],['5','Каждое пятое']]);
- if(page==='prt')f.innerHTML=selectField('prtPort','Порт','1',[['1','UART1']])+selectField('prtBaud','Скорость UART','57600',[['9600','9600'],['19200','19200'],['38400','38400'],['57600','57600'],['115200','115200'],['230400','230400']])+checkField('prtInUbx','Принимать UBX',true)+checkField('prtInNmea','Принимать NMEA',true)+checkField('prtOutUbx','Передавать UBX',false)+checkField('prtOutNmea','Передавать NMEA',true);
- if(page==='rate')f.innerHTML=field('rateMeas','Measurement period (ms)',1000)+field('rateNav','Navigation rate (cycles)',1)+selectField('rateRef','Time reference',1,[[0,'UTC'],[1,'GPS'],[2,'GLONASS'],[3,'BeiDou'],[4,'Galileo']]);
- if(page==='nav5')f.innerHTML=selectField('navFix','Dynamic platform model',0,[[0,'Portable'],[2,'Stationary'],[3,'Pedestrian'],[4,'Automotive'],[5,'Sea'],[6,'Airborne <1g'],[7,'Airborne <2g'],[8,'Airborne <4g']])+selectField('navFixMode','Fix mode',3,[[1,'2D only'],[2,'3D only'],[3,'Auto 2D/3D']])+field('navMinElev','Minimum elevation (°)',5)+field('navDrLimit','Dead reckoning limit (s)',0)+field('navPAcc','Position accuracy mask (m)',100)+field('navTAcc','Time accuracy mask (m)',300)+checkField('navFix3d','Задействовать ограничения фикса',false);
- if(page==='sbas')f.innerHTML=checkField('sbasEnable','SBAS включён',true)+selectField('sbasMode','Режим',3,[[0,'Только тест'],[1,'Только ranging'],[3,'Ranging + corrections']])+field('sbasMax','Максимум SBAS спутников',3)+checkField('sbasRanging','Использовать ranging',true)+checkField('sbasDiff','Использовать differential corrections',true)+checkField('sbasIntegrity','Использовать integrity',true);
- if(page==='nmea')f.innerHTML=selectField('nmeaVersion','Версия NMEA',4,[[0,'2.1'],[1,'2.3'],[2,'2.3'],[3,'2.3'],[4,'4.0']])+selectField('nmeaNumSV','Номер спутника',0,[[0,'Extended'],[1,'Strict']])+checkField('nmeaCompat','Compatibility mode',false)+checkField('nmeaConsider','Consider mode',false)+checkField('nmeaLimit82','Ограничение длины 82 символа',false);
- if(page==='cfg')f.innerHTML='<p>Сохранить текущие параметры приёмника в энергонезависимую память (BBR/Flash) через CFG-CFG.</p>'+checkField('cfgBbr','Сохранить в BBR',true)+checkField('cfgFlash','Сохранить во Flash',true)+checkField('cfgClear','Очистить перед записью',false)+'<p class="small">Поддержка Flash зависит от конкретной платы NEO-6M и её памяти.</p>';
+  ubxPage=page;
+  document.querySelectorAll('.ubx-nav-item').forEach(b=>b.classList.toggle('active',b.dataset.page===page));
+  document.getElementById('ubxPageTitle').textContent=ubxPageInfo[page].title;
+  const f=document.getElementById('ubxFields');
+  if(page==='gnss'){
+    f.innerHTML='<div class="ubx-field"><label>Приёмник</label><strong>u-blox NEO-6M</strong></div>'+
+      '<div class="ubx-field"><label>Основная GNSS</label><strong>GPS — поддерживается аппаратно</strong></div>'+
+      '<div class="ubx-field"><label>Другие созвездия</label><strong>GLONASS / Galileo / BeiDou — не поддерживаются NEO-6M</strong></div>'+
+      '<p class="small">У u-blox 6 нет команды CFG-GNSS. Ниже доступны реальные параметры CFG-SBAS (EGNOS/WAAS/MSAS).</p>'+
+      checkField('gnssSbasEnable','SBAS включён',true)+
+      checkField('gnssSbasTest','Разрешить SBAS Test Mode',false)+
+      checkField('gnssSbasRange','Использовать SBAS как источник измерений',true)+
+      checkField('gnssSbasDiff','Применять дифференциальные поправки',true)+
+      checkField('gnssSbasIntegrity','Использовать контроль целостности',true)+
+      field('gnssSbasMax','Каналов SBAS (0–3)',3)+
+      field('gnssSbasScan','Маска PRN SBAS (0 = автопоиск)',0,'number','min="0" max="4294967295"');
+  }
+  if(page==='msg'){
+    f.innerHTML=selectField('msgClass','Класс сообщения','F0',[['F0','NMEA standard (F0)'],['F1','NMEA proprietary (F1)'],['01','NAV (01)'],['02','RXM (02)'],['0A','MON (0A)']])+
+      selectField('msgId','Сообщение','00',[['00','GGA — Fix data'],['01','GLL — Geographic position'],['02','GSA — DOP and active satellites'],['03','GSV — Satellites in view'],['04','RMC — Recommended minimum'],['05','VTG — Course and speed'],['08','ZDA — Time and date']])+
+      selectField('msgRate','Частота UART1','1',[['0','0 — выключено'],['1','1 — каждое решение'],['2','2 — каждое второе'],['5','5 — каждое пятое']])+
+      '<p class="small">Для u-blox 6 CFG-MSG использует 3-байтовый Set: класс, ID и частота на том порту, по которому отправлена команда (здесь UART1).</p>';
+  }
+  if(page==='nav5'){
+    f.innerHTML=selectField('navDyn','Dynamic platform model',0,[[0,'Portable'],[2,'Stationary'],[3,'Pedestrian'],[4,'Automotive'],[5,'Sea'],[6,'Airborne <1g'],[7,'Airborne <2g'],[8,'Airborne <4g']])+
+      selectField('navFixMode','Position fix mode',3,[[1,'2D only'],[2,'3D only'],[3,'Auto 2D/3D']])+
+      field('navFixedAlt','Fixed altitude (m)',0,'number','step="0.01"')+
+      field('navFixedAltVar','Fixed altitude variance (m²)',0,'number','step="0.0001"')+
+      field('navMinElev','Minimum satellite elevation (°)',5)+
+      field('navDrLimit','Dead reckoning limit (s)',0)+
+      field('navPDop','Position DOP mask',0,'number','step="0.1"')+
+      field('navTDop','Time DOP mask',0,'number','step="0.1"')+
+      field('navPAcc','Position accuracy mask (m)',100)+
+      field('navTAcc','Time accuracy mask (m)',300)+
+      field('navStaticHold','Static hold threshold (cm/s)',0)+
+      field('navDgpsTimeout','DGPS timeout (s)',0)+
+      '<p class="small">CFG-NAV5: fixed altitude передаётся с масштабом 0,01 м; DOP — 0,1. DGPS timeout зависит от версии firmware.</p>';
+  }
+  if(page==='prt'){
+    f.innerHTML=selectField('prtPort','Порт','1',[['1','UART1'],['2','UART2']])+
+      field('prtBaud','Baud rate',57600)+
+      selectField('prtDataBits','Data bits',8,[[7,'7'],[8,'8']])+
+      selectField('prtParity','Parity','none',[['none','None'],['even','Even'],['odd','Odd']])+
+      selectField('prtStopBits','Stop bits',1,[[1,'1'],[2,'2']])+
+      checkField('prtInUbx','Input protocol: UBX',true)+checkField('prtInNmea','Input protocol: NMEA',true)+
+      checkField('prtInRtcm','Input protocol: RTCM',false)+checkField('prtOutUbx','Output protocol: UBX',false)+
+      checkField('prtOutNmea','Output protocol: NMEA',true)+checkField('prtOutRtcm','Output protocol: RTCM',false)+
+      '<p class="small">UART mode (8N1 по умолчанию) и маски протоколов формируются по полям CFG-PRT u-blox 6.</p>';
+  }
+  if(page==='rate'){
+    f.innerHTML=field('rateMeas','Measurement period (ms)',1000)+
+      field('rateNav','Navigation rate (cycles)',1,'number','disabled')+
+      selectField('rateRef','Time reference',1,[[0,'UTC'],[1,'GPS']])+
+      '<p class="small">Для u-blox 6 navigation rate фиксирован равным 1 и не изменяется. 1000 мс соответствует 1 Гц.</p>';
+  }
+  if(page==='tp5'){
+    f.innerHTML=selectField('tpIdx','Timepulse output',0,[[0,'TIMEPULSE'],[1,'TIMEPULSE2']])+
+      field('tpAntDelay','Antenna cable delay (ns)',0)+field('tpRfDelay','RF group delay (ns)',0,'number','disabled')+
+      field('tpFreq','Frequency (Hz) / period (µs)',1000000)+field('tpFreqLock','Frequency / period when GPS locked',1000000)+
+      field('tpPulse','Pulse length (µs) / duty cycle',100000)+field('tpPulseLock','Pulse length / duty cycle when locked',100000)+
+      field('tpUserDelay','User configurable delay (ns)',0)+
+      checkField('tpActive','Timepulse active',false)+checkField('tpLockGps','Synchronize to GPS time',true)+
+      checkField('tpLockedOther','Use locked frequency/pulse values',false)+checkField('tpIsFreq','Frequency mode (off = period)',true)+
+      checkField('tpIsLength','Pulse length mode (off = duty cycle)',true)+checkField('tpAlign','Align pulse to top of second',false)+
+      checkField('tpPolarity','Rising edge at top of second',true)+selectField('tpGrid','Time grid',1,[[0,'UTC'],[1,'GPS']])+
+      '<p class="small">RF group delay — read-only. CFG-TP5 использует 32-байтовый payload; единицы и флаги соответствуют протоколу u-blox 6.</p>';
+  }
 }
 function hexBytes(hex){return hex.trim().split(/\s+/).filter(Boolean).map(x=>parseInt(x,16));}
 function ubxFramePayload(){const b=hexBytes(ubxLastFrame);if(b.length<8||b[0]!==181||b[1]!==98)return null;return {cls:b[2],id:b[3],p:b.slice(6,-2)};}
-function u16(v){return [v&255,(v>>8)&255]} function u32(v){return [v&255,(v>>8)&255,(v>>16)&255,(v>>24)&255]}
+function u16(v){v=Math.round(Number(v)||0);return [v&255,(v>>8)&255];}
+function u32(v){v=Math.round(Number(v)||0);return [v&255,(v>>8)&255,(v>>16)&255,(v>>24)&255];}
+function readU16(p,o){return p[o]|(p[o+1]<<8);}
+function readU32(p,o){return (p[o]|(p[o+1]<<8)|(p[o+2]<<16)|(p[o+3]<<24))>>>0;}
 function payloadForPage(){
- const n=id=>Number(document.getElementById(id).value)||0, ck=id=>document.getElementById(id).checked;
- if(ubxPage==='msg')return [parseInt(document.getElementById('msgClass').value,16),parseInt(document.getElementById('msgId').value,16),0,n('msgRate'),0,0,0,0];
- if(ubxPage==='prt'){let mode=0x000008D0,im=(ck('prtInUbx')?1:0)|(ck('prtInNmea')?2:0),om=(ck('prtOutUbx')?1:0)|(ck('prtOutNmea')?2:0);return [n('prtPort'),0,0,0,...u32(mode),...u32(n('prtBaud')),...u16(im),...u16(om),0,0,0,0];}
- if(ubxPage==='rate')return [...u16(n('rateMeas')),...u16(n('rateNav')),...u16(n('rateRef'))];
- if(ubxPage==='nav5'){let mask=0xFFFF,dyn=n('navFix'),fix=n('navFixMode');return [...u16(mask),dyn,fix,...u32(0),...u32(0),n('navMinElev')&255,n('navDrLimit')&255,...u16(0),...u16(0),...u16(n('navPAcc')),...u16(n('navTAcc')),0,0,0,0,0,0,0,0,0,0];}
- if(ubxPage==='sbas'){let mode=n('sbasMode'),usage=(ck('sbasRanging')?1:0)|(ck('sbasDiff')?2:0)|(ck('sbasIntegrity')?4:0);return [ck('sbasEnable')?1:0,mode,usage,n('sbasMax'),0,0,0,0];}
- if(ubxPage==='nmea'){let flags=(ck('nmeaCompat')?1:0)|(ck('nmeaConsider')?2:0)|(ck('nmeaLimit82')?4:0);return [n('nmeaVersion'),n('nmeaNumSV'),flags,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];}
- if(ubxPage==='cfg'){let clear=(ck('cfgClear')?0xFFFF:0),save=(ck('cfgBbr')?0x0001:0)|(ck('cfgFlash')?0x0002:0);return [...u32(clear),...u32(save),...u32(0)];}
- return [];
+  const n=id=>Number(document.getElementById(id).value)||0;
+  const ck=id=>document.getElementById(id).checked;
+  if(ubxPage==='gnss'){
+    const mode=(ck('gnssSbasEnable')?1:0)|(ck('gnssSbasTest')?2:0);
+    const usage=(ck('gnssSbasRange')?1:0)|(ck('gnssSbasDiff')?2:0)|(ck('gnssSbasIntegrity')?4:0);
+    const prn=Math.max(0,Math.min(0xFFFFFFFF,n('gnssSbasScan')))>>>0;
+    return [mode,usage,Math.max(0,Math.min(3,n('gnssSbasMax'))),0,...u32(prn)];
+  }
+  if(ubxPage==='msg')return [parseInt(document.getElementById('msgClass').value,16),parseInt(document.getElementById('msgId').value,16),n('msgRate')];
+  if(ubxPage==='prt'){
+    const port=n('prtPort'),baud=n('prtBaud');
+    const dataBits=n('prtDataBits')===7?2:3;
+    const parity=document.getElementById('prtParity').value;
+    const parityBits=parity==='even'?0:(parity==='odd'?1:4);
+    const stopBits=n('prtStopBits')===2?2:0;
+    const mode=(1<<4)|(dataBits<<6)|(parityBits<<9)|(stopBits<<12);
+    const inMask=(ck('prtInUbx')?1:0)|(ck('prtInNmea')?2:0)|(ck('prtInRtcm')?4:0);
+    const outMask=(ck('prtOutUbx')?1:0)|(ck('prtOutNmea')?2:0)|(ck('prtOutRtcm')?4:0);
+    return [port,0,0,0,...u32(mode),...u32(baud),...u16(inMask),...u16(outMask),0,0,0,0];
+  }
+  if(ubxPage==='rate')return [...u16(n('rateMeas')),...u16(1),...u16(n('rateRef'))];
+  if(ubxPage==='nav5'){
+    const mask=0x00FF;
+    const fixedAlt=Math.round(n('navFixedAlt')*100);
+    const fixedAltVar=Math.max(0,Math.round(n('navFixedAltVar')*10000));
+    const pDop=Math.max(0,Math.round(n('navPDop')*10));
+    const tDop=Math.max(0,Math.round(n('navTDop')*10));
+    return [...u16(mask),n('navDyn'),n('navFixMode'),...u32(fixedAlt),...u32(fixedAltVar),n('navMinElev')&255,n('navDrLimit')&255,...u16(pDop),...u16(tDop),...u16(n('navPAcc')),...u16(n('navTAcc')),n('navStaticHold')&255,n('navDgpsTimeout')&255,0,0,0,0,0,0,0,0,0,0,0,0];
+  }
+  if(ubxPage==='tp5'){
+    const flags=(ck('tpActive')?1:0)|(ck('tpLockGps')?2:0)|(ck('tpLockedOther')?4:0)|(ck('tpIsFreq')?8:0)|(ck('tpIsLength')?16:0)|(ck('tpAlign')?32:0)|(ck('tpPolarity')?64:0)|(Number(document.getElementById('tpGrid').value)?128:0);
+    return [n('tpIdx'),0,0,0,...u16(n('tpAntDelay')),...u16(n('tpRfDelay')),...u32(n('tpFreq')),...u32(n('tpFreqLock')),...u32(n('tpPulse')),...u32(n('tpPulseLock')),...u32(n('tpUserDelay')),...u32(flags)];
+  }
+  return [];
 }
-async function sendUbxPacket(cls,id,payload){const h=payload.map(v=>v.toString(16).padStart(2,'0')).join(' ');return fetch('/ubx/send?cls='+cls.toString(16)+'&id='+id.toString(16)+'&payload='+encodeURIComponent(h),{method:'POST'});}
+async function sendUbxPacket(id,payload){
+  const h=payload.map(v=>(v&255).toString(16).padStart(2,'0')).join(' ');
+  return fetch('/ubx/send?cls=06&id='+id.toString(16).padStart(2,'0')+'&payload='+encodeURIComponent(h),{method:'POST'});
+}
 async function pollUbxPage(){
- const q=ubxPage==='msg'?[parseInt(document.getElementById('msgClass').value,16),parseInt(document.getElementById('msgId').value,16)]:ubxPage==='tp5'?[0]:[];
- const r=await sendUbxPacket(6,ubxPageInfo[ubxPage].id,q);
- document.getElementById('ubxStatus').textContent=r.ok?'Запрос отправлен. Ожидаю ответ приёмника…':'Ошибка Poll';
- setTimeout(refreshUbxStatus,350);
+  let q=[];
+  if(ubxPage==='msg')q=[parseInt(document.getElementById('msgClass').value,16),parseInt(document.getElementById('msgId').value,16)];
+  if(ubxPage==='prt')q=[Number(document.getElementById('prtPort').value)];
+  if(ubxPage==='tp5')q=[Number(document.getElementById('tpIdx').value)];
+  const r=await sendUbxPacket(ubxPageInfo[ubxPage].id,q);
+  document.getElementById('ubxStatus').textContent=r.ok?'Poll отправлен. Ожидаю ответ приёмника…':'Ошибка Poll';
+  setTimeout(refreshUbxStatus,350);
 }
 async function writeUbxPage(){
- const p=payloadForPage(),r=await sendUbxPacket(6,ubxPageInfo[ubxPage].id,p);
- document.getElementById('ubxStatus').textContent=r.ok?'Параметры отправлены. Проверьте ответ ACK/NAK.':'Ошибка отправки';
- setTimeout(refreshUbxStatus,350);
+  const p=payloadForPage(),r=await sendUbxPacket(ubxPageInfo[ubxPage].id,p);
+  document.getElementById('ubxStatus').textContent=r.ok?'Параметры отправлены. Ожидаю ACK/NAK…':'Ошибка отправки';
+  setTimeout(refreshUbxStatus,350);
 }
 function decodeUbxPage(frame){
- const p=frame.p,d=document.getElementById('ubxFields');if(frame.cls!==6||frame.id!==ubxPageInfo[ubxPage].id)return;
- const set=(id,v)=>{const e=document.getElementById(id);if(e)e.value=v;};
- const check=(id,v)=>{const e=document.getElementById(id);if(e)e.checked=!!v;};
- if(ubxPage==='msg'&&p.length>=8)set('msgRate',p[3]);
- if(ubxPage==='prt'&&p.length>=20){set('prtPort',p[0]);set('prtBaud',(p[8]|p[9]<<8|p[10]<<16|p[11]<<24)>>>0);check('prtInUbx',p[12]&1);check('prtInNmea',p[12]&2);check('prtOutUbx',p[14]&1);check('prtOutNmea',p[14]&2);}
- if(ubxPage==='rate'&&p.length>=6){set('rateMeas',p[0]|p[1]<<8);set('rateNav',p[2]|p[3]<<8);set('rateRef',p[4]|p[5]<<8);}
- if(ubxPage==='nav5'&&p.length>=36){set('navFix',p[2]);set('navFixMode',p[3]);set('navMinElev',p[14]);set('navDrLimit',p[15]);set('navPAcc',p[20]|p[21]<<8);set('navTAcc',p[22]|p[23]<<8);}
- if(ubxPage==='sbas'&&p.length>=8){check('sbasEnable',p[0]&1);set('sbasMode',p[1]);check('sbasRanging',p[2]&1);check('sbasDiff',p[2]&2);check('sbasIntegrity',p[2]&4);set('sbasMax',p[3]);}
- if(ubxPage==='nmea'&&p.length>=20){set('nmeaVersion',p[0]);set('nmeaNumSV',p[1]);check('nmeaCompat',p[2]&1);check('nmeaConsider',p[2]&2);check('nmeaLimit82',p[2]&4);}
+  const p=frame.p;
+  if(frame.cls!==6||frame.id!==ubxPageInfo[ubxPage].id)return;
+  const set=(id,v)=>{const e=document.getElementById(id);if(e)e.value=v;};
+  const check=(id,v)=>{const e=document.getElementById(id);if(e)e.checked=!!v;};
+  if(ubxPage==='gnss'&&p.length>=8){
+    check('gnssSbasEnable',p[0]&1);check('gnssSbasTest',p[0]&2);
+    check('gnssSbasRange',p[1]&1);check('gnssSbasDiff',p[1]&2);check('gnssSbasIntegrity',p[1]&4);
+    set('gnssSbasMax',p[2]);set('gnssSbasScan',readU32(p,4));
+  }
+  if(ubxPage==='msg'&&p.length>=3)set('msgRate',p[2]);
+  if(ubxPage==='prt'&&p.length>=20){
+    set('prtPort',p[0]);set('prtBaud',readU32(p,8));
+    const mode=readU32(p,4),bits=(mode>>6)&3,parity=(mode>>9)&7,stop=(mode>>12)&3;
+    set('prtDataBits',bits===2?7:8);set('prtParity',parity===0?'even':parity===1?'odd':'none');set('prtStopBits',stop===2?2:1);
+    const im=readU16(p,12),om=readU16(p,14);
+    check('prtInUbx',im&1);check('prtInNmea',im&2);check('prtInRtcm',im&4);
+    check('prtOutUbx',om&1);check('prtOutNmea',om&2);check('prtOutRtcm',om&4);
+  }
+  if(ubxPage==='rate'&&p.length>=6){set('rateMeas',readU16(p,0));set('rateNav',readU16(p,2));set('rateRef',readU16(p,4));}
+  if(ubxPage==='nav5'&&p.length>=36){
+    set('navDyn',p[2]);set('navFixMode',p[3]);set('navFixedAlt',(readU32(p,4)|0)/100);
+    set('navFixedAltVar',readU32(p,8)/10000);set('navMinElev',p[12]);set('navDrLimit',p[13]);
+    set('navPDop',readU16(p,14)/10);set('navTDop',readU16(p,16)/10);
+    set('navPAcc',readU16(p,18));set('navTAcc',readU16(p,20));set('navStaticHold',p[22]);set('navDgpsTimeout',p[23]);
+  }
+  if(ubxPage==='tp5'&&p.length>=32){
+    set('tpIdx',p[0]);set('tpAntDelay',(p[4]|p[5]<<8)<<16>>16);set('tpRfDelay',(p[6]|p[7]<<8)<<16>>16);
+    set('tpFreq',readU32(p,8));set('tpFreqLock',readU32(p,12));set('tpPulse',readU32(p,16));set('tpPulseLock',readU32(p,20));
+    set('tpUserDelay',readU32(p,24)|0);
+    const flags=readU32(p,28);
+    check('tpActive',flags&1);check('tpLockGps',flags&2);check('tpLockedOther',flags&4);
+    check('tpIsFreq',flags&8);check('tpIsLength',flags&16);check('tpAlign',flags&32);check('tpPolarity',flags&64);
+    set('tpGrid',(flags&128)?1:0);
+  }
 }
 async function refreshUbxStatus(){
- try{const d=await (await fetch('/ubx/status')).json();document.getElementById('ubxFrame').textContent=d.frame||'Ответ ещё не получен';if(d.frame&&d.frame!==ubxLastFrame){ubxLastFrame=d.frame;const fr=ubxFramePayload();if(fr){decodeUbxPage(fr);document.getElementById('ubxStatus').textContent='Получен ответ UBX '+fr.cls.toString(16).toUpperCase()+':'+fr.id.toString(16).toUpperCase();}}else if(d.event)document.getElementById('ubxStatus').textContent=d.event;}catch(e){}
+  try{
+    const d=await (await fetch('/ubx/status?ts='+Date.now())).json();
+    document.getElementById('ubxFrame').textContent=d.frame||'Ответ ещё не получен';
+    if(d.frame&&d.frame!==ubxLastFrame){
+      ubxLastFrame=d.frame;
+      const fr=ubxFramePayload();
+      if(fr){decodeUbxPage(fr);document.getElementById('ubxStatus').textContent='Получен UBX '+fr.cls.toString(16).toUpperCase()+':'+fr.id.toString(16).toUpperCase();}
+    }else if(d.event)document.getElementById('ubxStatus').textContent=d.event;
+  }catch(e){}
 }
-
-async function refreshUart(){
+async function refreshUart(){async function refreshUart(){
  const status=document.getElementById('uartStatus');
  try{
   // Query token avoids stale responses and avoids Safari RequestInit/cache quirks.
@@ -679,7 +925,7 @@ async function startNmeaSimulator(){
  try{
   const r=await fetch('/simulator/start',{method:'POST'});
   const d=await r.json();
-  document.getElementById('simulatorStatus').textContent=d.enabled?'Имитатор включён: Sarov, TX GPIO8 → RX GPIO44':'Не удалось включить имитатор';
+  document.getElementById('simulatorStatus').textContent=d.enabled?'Имитация включена: кольцевой маршрут в Сарове, 60 секунд на круг':'Не удалось включить имитатор';
  }catch(e){document.getElementById('simulatorStatus').textContent='Ошибка запуска имитатора';}
 }
 async function stopNmeaSimulator(){
@@ -740,7 +986,7 @@ setInterval(()=>{if(!document.getElementById('imuTab').classList.contains('hidde
 setInterval(()=>{if(!document.getElementById('uartTab').classList.contains('hidden'))refreshUart();},500);
 setInterval(()=>{if(!document.getElementById('ubxTab').classList.contains('hidden'))refreshUbxStatus();},500);
 refreshUart();
-selectUbxPage('msg');
+selectUbxPage('gnss');
 loadMaps();
 refreshGps();
 refreshSavedPoints();
@@ -823,6 +1069,41 @@ void handleUbxStatus() {
   String out;serializeJson(d,out);server.send(200,"application/json",out);
 }
 
+void handleSetFixTimeout() {
+  int seconds = server.arg("seconds").toInt();
+  if (seconds < 1 || seconds > 60) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"seconds must be 1..60\"}");
+    return;
+  }
+  fixTimeoutSeconds = (uint8_t)seconds;
+  preferences.putUChar("fix_timeout", fixTimeoutSeconds);
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleYandexKeyGet() {
+  JsonDocument doc;
+  doc["key"] = preferences.getString("yandex_key", "");
+  String out; serializeJson(doc, out);
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", out);
+}
+
+void handleYandexKeySet() {
+  JsonDocument input;
+  if (deserializeJson(input, server.arg("plain"))) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid JSON\"}");
+    return;
+  }
+  String key = input["key"] | "";
+  key.trim();
+  if (key.length() > 160) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"key too long\"}");
+    return;
+  }
+  preferences.putString("yandex_key", key);
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
 void handleCoords() {
   server.sendHeader("Cache-Control", "no-store");
   server.send(200, "application/json", coordsJson());
@@ -878,17 +1159,19 @@ void handleTile() {
 
 void handleSimulatorStart() {
   nmeaSimulatorEnabled = true;
-  haveFix = false;
-  lat = 0.0; lng = 0.0; altitude = 0.0;
-  satellites = 0; satellitesVisible = 0; hdop = 0.0;
+  simulatorStartMs = millis();
   lastSimulatorSentenceMs = 0;
-  server.send(200, "application/json", "{\"ok\":true,\"enabled\":true}");
+  satellites = 8; satellitesVisible = 8; hdop = 0.9;
+  updateSimulatorPosition();
+  server.send(200, "application/json", "{\"ok\":true,\"enabled\":true,\"route_seconds\":60}");
 }
 
 void handleSimulatorStop() {
   nmeaSimulatorEnabled = false;
-  // Keep the last marker briefly; the stale-fix timeout clears it after 7 seconds.
+  // Keep the last simulated point until the configurable stale-fix timeout expires.
   if (haveFix) lastFixMs = millis();
+  satellites = 0;
+  satellitesVisible = 0;
   server.send(200, "application/json", "{\"ok\":true,\"enabled\":false}");
 }
 
@@ -969,6 +1252,8 @@ void setup() {
 
   preferences.begin("imu", false);
   if (!preferences.isKey("points")) preferences.putString("points", "[]");
+  fixTimeoutSeconds = preferences.getUChar("fix_timeout", 7);
+  if (fixTimeoutSeconds < 1 || fixTimeoutSeconds > 60) fixTimeoutSeconds = 7;
   gyroOffsetX = preferences.getFloat("gx", 0);
   gyroOffsetY = preferences.getFloat("gy", 0);
   gyroOffsetZ = preferences.getFloat("gz", 0);
@@ -1018,6 +1303,9 @@ void setup() {
   server.on("/imu", HTTP_GET, handleImu);
   server.on("/uart", HTTP_GET, handleUart);
   server.on("/maps", HTTP_GET, handleMaps);
+  server.on("/maps/yandex-key", HTTP_GET, handleYandexKeyGet);
+  server.on("/maps/yandex-key", HTTP_POST, handleYandexKeySet);
+  server.on("/settings/fix-timeout", HTTP_POST, handleSetFixTimeout);
   server.on("/tiles", HTTP_GET, handleTile);
   server.on("/display/test", HTTP_POST, handleDisplayTest);
   server.on("/simulator/start", HTTP_POST, handleSimulatorStart);
@@ -1063,28 +1351,82 @@ String nmeaWithChecksum(const String& payload) {
   return "$" + payload + String(suffix) + "\r\n";
 }
 
+String toNmeaCoordinate(double value, bool isLatitude, char& hemisphere) {
+  hemisphere = value < 0 ? (isLatitude ? 'S' : 'W') : (isLatitude ? 'N' : 'E');
+  double absoluteValue = fabs(value);
+  int degrees = (int)absoluteValue;
+  double minutes = (absoluteValue - degrees) * 60.0;
+  char buffer[20];
+  snprintf(buffer, sizeof(buffer), isLatitude ? "%02d%07.4f" : "%03d%07.4f", degrees, minutes);
+  return String(buffer);
+}
+
+void updateSimulatorPosition() {
+  if (!nmeaSimulatorEnabled) return;
+  const double centerLat = 54.922700;
+  const double centerLng = 43.344800;
+  const double radiusLat = 0.00045; // about 50 m
+  const double radiusLng = 0.00065; // about 42 m at Sarov latitude
+  const double pi = 3.14159265358979323846;
+  double phase = (double)(millis() - simulatorStartMs) / 60000.0;
+  phase -= floor(phase);
+  double angle = phase * 2.0 * pi;
+  simulatorLat = centerLat + radiusLat * cos(angle);
+  simulatorLng = centerLng + radiusLng * sin(angle);
+  lat = simulatorLat;
+  lng = simulatorLng;
+  altitude = 125.0;
+  satellites = 8;
+  satellitesVisible = 8;
+  hdop = 0.9;
+  haveFix = true;
+  lastFixMs = millis();
+}
+
 void sendNmeaSimulatorFrame() {
-  // Approximate city-centre coordinates: 54.9227 N, 43.3448 E.
-  static const char* sentences[] = {
-    "GPRMC,120000.00,A,5455.3620,N,04320.6880,E,0.0,0.0,141126,,,A",
-    "GPGGA,120000.00,5455.3620,N,04320.6880,E,1,08,0.9,125.0,M,0.0,M,,",
-    "GPGSA,A,3,01,02,03,04,05,06,07,08,,,,,1.2,0.9,0.8",
-    "GPGSV,2,1,08,01,45,120,40,02,35,230,38,03,25,310,36,04,60,050,42",
-    "GPGSV,2,2,08,05,30,180,39,06,20,270,35,07,50,020,41,08,15,330,32",
-    "GPVTG,0.0,T,,M,0.0,N,0.0,K,A",
-    "GPGLL,5455.3620,N,04320.6880,E,120000.00,A,A"
-  };
-  for (const char* sentence : sentences) simulatorSerial.print(nmeaWithChecksum(sentence));
+  updateSimulatorPosition();
+  const double pi = 3.14159265358979323846;
+  double phase = (double)(millis() - simulatorStartMs) / 60000.0;
+  phase -= floor(phase);
+  double angle = phase * 2.0 * pi;
+  double east = 0.00065 * cos(angle) * cos(simulatorLat * pi / 180.0);
+  double north = -0.00045 * sin(angle);
+  double course = atan2(east, north) * 180.0 / pi;
+  if (course < 0) course += 360.0;
+  double circumference = 2.0 * pi * sqrt((pow(50.0, 2.0) + pow(42.0, 2.0)) / 2.0);
+  double speedKnots = (circumference / 60.0) * 1.943844;
+  uint32_t seconds = (millis() / 1000UL) % 86400UL;
+  char timeText[16], dateText[8];
+  snprintf(timeText, sizeof(timeText), "%02lu%02lu%02lu.00",
+    (unsigned long)(seconds / 3600UL),
+    (unsigned long)((seconds / 60UL) % 60UL),
+    (unsigned long)(seconds % 60UL));
+  snprintf(dateText, sizeof(dateText), "151126");
+  char latHem, lonHem;
+  String nmeaLat = toNmeaCoordinate(simulatorLat, true, latHem);
+  String nmeaLng = toNmeaCoordinate(simulatorLng, false, lonHem);
+  String rmc = "GPRMC," + String(timeText) + ",A," + nmeaLat + "," + latHem + "," +
+    nmeaLng + "," + lonHem + "," + String(speedKnots, 1) + "," + String(course, 1) + "," + dateText + ",,,A";
+  String gga = "GPGGA," + String(timeText) + "," + nmeaLat + "," + latHem + "," +
+    nmeaLng + "," + lonHem + ",1,08,0.9,125.0,M,0.0,M,,";
+  simulatorSerial.print(nmeaWithChecksum(rmc));
+  simulatorSerial.print(nmeaWithChecksum(gga));
+  simulatorSerial.print(nmeaWithChecksum("GPGSA,A,3,01,02,03,04,05,06,07,08,,,,,1.2,0.9,0.8"));
+  simulatorSerial.print(nmeaWithChecksum("GPGSV,2,1,08,01,45,120,40,02,35,230,38,03,25,310,36,04,60,050,42"));
+  simulatorSerial.print(nmeaWithChecksum("GPGSV,2,2,08,05,30,180,39,06,20,270,35,07,50,020,41,08,15,330,32"));
+  simulatorSerial.print(nmeaWithChecksum("GPVTG," + String(course, 1) + ",T,,M," + String(speedKnots, 1) + ",N," + String(speedKnots * 1.852, 1) + ",K,A"));
 }
 
 void loop() {
   server.handleClient();
 
-  if (haveFix && millis() - lastFixMs > 7000) {
+  if (haveFix && millis() - lastFixMs > (unsigned long)fixTimeoutSeconds * 1000UL) {
     haveFix = false;
     lat = 0.0; lng = 0.0; altitude = 0.0;
     satellites = 0; satellitesVisible = 0; hdop = 0.0;
   }
+  if (lastGgaMs && millis() - lastGgaMs > 3000) satellites = 0;
+  if (lastGsvMs && millis() - lastGsvMs > 5000) satellitesVisible = 0;
 
   if (nmeaSimulatorEnabled && millis() - lastSimulatorSentenceMs >= 1000) {
     lastSimulatorSentenceMs = millis();
@@ -1118,6 +1460,19 @@ void loop() {
       if (uartCurrentLine.length() < 160) uartCurrentLine += c;
       else { uartLineOverflow = true; uartInvalidSentences++; uartCurrentLine = ""; }
     }
+    if (c == '\n') {
+      uartCurrentLine.trim();
+      if (uartCurrentLine.length()) processNmeaLine(uartCurrentLine);
+      if (uartCurrentLine.length()) {
+        uartLastLine = uartCurrentLine;
+        uartRecentLines += uartCurrentLine + "\n";
+        if (uartRecentLines.length() > 1200) uartRecentLines.remove(0, uartRecentLines.length()-1200);
+      }
+      uartCurrentLine = ""; uartLineOverflow = false;
+    } else if (c != '\r') {
+      if (uartCurrentLine.length() < 160) uartCurrentLine += c;
+      else { uartLineOverflow = true; uartInvalidSentences++; uartCurrentLine = ""; }
+    }
     if (gps.encode(c)) {
       if (gps.location.isValid() && gps.location.isUpdated()) {
         lat = gps.location.lat();
@@ -1130,15 +1485,13 @@ void loop() {
         altitude = gps.altitude.meters();
       }
 
-      if (gps.satellites.isValid()) {
-        satellites = gps.satellites.value();
-      }
-
       if (gps.hdop.isValid()) {
         hdop = gps.hdop.hdop();
       }
     }
   }
+
+  if (nmeaSimulatorEnabled) updateSimulatorPosition();
 
   static unsigned long lastImu = 0;
   if (millis() - lastImu > 20) {
