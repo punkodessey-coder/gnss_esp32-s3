@@ -929,7 +929,7 @@ function decodeUbxPage(frame){
     check('gnssSbasRange',p[1]&1);check('gnssSbasDiff',p[1]&2);check('gnssSbasIntegrity',p[1]&4);
     set('gnssSbasMax',p[2]);set('gnssSbasScan',readU32(p,4));
   }
-  if(ubxPage==='msg'&&p.length>=8){set('msgI2c',p[3]);set('msgUart1',p[4]);set('msgUart2',p[5]);set('msgUsb',p[6]);set('msgSpi',p[7]);}
+  if(ubxPage==='msg'&&p.length>=8){set('msgI2c',p[2]);set('msgUart1',p[3]);set('msgUart2',p[4]);set('msgUsb',p[5]);set('msgSpi',p[6]);}
   if(ubxPage==='prt'&&p.length>=20){
     set('prtPort',p[0]);set('prtBaud',readU32(p,8));
     const mode=readU32(p,4),bits=(mode>>6)&3,parity=(mode>>9)&7,stop=(mode>>12)&3;
