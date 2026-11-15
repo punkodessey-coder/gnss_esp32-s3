@@ -547,6 +547,7 @@ async function saveYandexKey(){
     const r=await fetch('/maps/yandex-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key})});
     if(!r.ok) throw new Error('HTTP '+r.status);
     yandexApiKey=key;
+    window.__yandexMapsPromise=null;
     document.getElementById('mapStatus').textContent=key?'Ключ сохранён. Загружаю Яндекс Гибрид…':'Ключ удалён';
     if(key) await selectMap('online:yandex');
   }catch(e){document.getElementById('mapStatus').textContent='Не удалось сохранить ключ Яндекса: '+e.message;}
@@ -1451,8 +1452,8 @@ void updateSimulatorPosition() {
   if (!nmeaSimulatorEnabled) return;
   const double centerLat = 54.922700;
   const double centerLng = 43.344800;
-  const double radiusLat = 0.00045; // about 50 m
-  const double radiusLng = 0.00065; // about 42 m at Sarov latitude
+  const double radiusLat = 0.00018; // about 20 m north/south
+  const double radiusLng = 0.000314; // about 20 m east/west at Sarov latitude
   const double pi = 3.14159265358979323846;
   double phase = (double)(millis() - simulatorStartMs) / 60000.0;
   phase -= floor(phase);
@@ -1475,11 +1476,11 @@ void sendNmeaSimulatorFrame() {
   double phase = (double)(millis() - simulatorStartMs) / 60000.0;
   phase -= floor(phase);
   double angle = phase * 2.0 * pi;
-  double east = 0.00065 * cos(angle) * cos(simulatorLat * pi / 180.0);
-  double north = -0.00045 * sin(angle);
+  double east = 0.000314 * cos(angle) * cos(simulatorLat * pi / 180.0);
+  double north = -0.00018 * sin(angle);
   double course = atan2(east, north) * 180.0 / pi;
   if (course < 0) course += 360.0;
-  double circumference = 2.0 * pi * sqrt((pow(50.0, 2.0) + pow(42.0, 2.0)) / 2.0);
+  double circumference = 2.0 * pi * 20.0;
   double speedKnots = (circumference / 60.0) * 1.943844;
   uint32_t seconds = (millis() / 1000UL) % 86400UL;
   char timeText[16], dateText[8];
