@@ -95,6 +95,7 @@ bool bleConnected = false;
 void startDisplayTest();
 void sendNmeaSimulatorFrame();
 void handleSimulatorStart();
+void updateSimulatorPosition();
 void handleSimulatorStop();
 void calibrateImuZero();
 void resetImuCalibration();
@@ -1441,25 +1442,6 @@ void loop() {
     char c = gpsSerial.read();
     processUbxByte((uint8_t)c);
     uartTotalBytes++; uartBytesWindow++; uartLastByteMs = millis();
-    if (c == '\n') {
-      uartCurrentLine.trim();
-      if (uartCurrentLine.length()) {
-        uartLastLine = uartCurrentLine;
-        if (uartCurrentLine.startsWith("$") && uartCurrentLine.indexOf("GSV,") > 0) {
-          int c1 = uartCurrentLine.indexOf(',');
-          int c2 = uartCurrentLine.indexOf(',', c1 + 1);
-          int c3 = c2 >= 0 ? uartCurrentLine.indexOf(',', c2 + 1) : -1;
-          int c4 = c3 >= 0 ? uartCurrentLine.indexOf(',', c3 + 1) : -1;
-          if (c4 > c3) satellitesVisible = uartCurrentLine.substring(c3 + 1, c4).toInt();
-        }
-        uartRecentLines += uartCurrentLine + "\n";
-        if (uartRecentLines.length() > 1200) uartRecentLines.remove(0, uartRecentLines.length()-1200);
-      }
-      uartCurrentLine = ""; uartLineOverflow = false;
-    } else if (c != '\r') {
-      if (uartCurrentLine.length() < 160) uartCurrentLine += c;
-      else { uartLineOverflow = true; uartInvalidSentences++; uartCurrentLine = ""; }
-    }
     if (c == '\n') {
       uartCurrentLine.trim();
       if (uartCurrentLine.length()) processNmeaLine(uartCurrentLine);
