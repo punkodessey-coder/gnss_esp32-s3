@@ -880,9 +880,10 @@ function payloadForPage(){
   if(ubxPage==='cfg'){
     const mask=prefix=>{
       let value=0;
-      ['Port','Messages','Info','Navigation','Rxm','Inventory','Antenna'].forEach((name,bit)=>{
+      const bits={Port:0,Messages:1,Info:2,Navigation:3,Rxm:4,Inventory:9,Antenna:10};
+      Object.keys(bits).forEach(name=>{
         const e=document.getElementById(prefix+name);
-        if(e&&e.checked)value|=(1<<bit);
+        if(e&&e.checked)value|=(1<<bits[name]);
       });
       return value;
     };
@@ -899,6 +900,10 @@ async function sendUbxPacket(id,payload){
   return fetch('/ubx/send?cls=06&id='+id.toString(16).padStart(2,'0')+'&payload='+encodeURIComponent(h),{method:'POST'});
 }
 async function pollUbxPage(){
+  if(ubxPage==='cfg'){
+    document.getElementById('ubxStatus').textContent='CFG-CFG — командная операция, Poll для неё не предусмотрен. Используйте «Записать» для выполнения выбранных Clear/Save/Load.';
+    return;
+  }
   let q=[];
   if(ubxPage==='msg')q=[parseInt(document.getElementById('msgClass').value,16),parseInt(document.getElementById('msgId').value,16)];
   if(ubxPage==='prt')q=[Number(document.getElementById('prtPort').value)];
