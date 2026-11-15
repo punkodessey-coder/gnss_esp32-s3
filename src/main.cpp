@@ -486,6 +486,7 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <button class="ubx-nav-item" data-page="rate" onclick="selectUbxPage('rate')">RATE — Rates</button>
 <button class="ubx-nav-item" data-page="tp5" onclick="selectUbxPage('tp5')">TP5 — Timepulse</button>
 <button class="ubx-nav-item" data-page="sbas" onclick="selectUbxPage('sbas')">SBAS — Augmentation</button>
+<button class="ubx-nav-item" data-page="nmea" onclick="selectUbxPage('nmea')">NMEA — Protocol</button>
 <button class="ubx-nav-item" data-page="cfg" onclick="selectUbxPage('cfg')">CFG — Save/Load</button>
 </nav>
 <section class="ubx-panel">
@@ -711,6 +712,7 @@ const ubxPageInfo={
   rate:{title:'RATE — Measurement and navigation rate',id:0x08},
   tp5:{title:'TP5 — Timepulse configuration',id:0x31},
   sbas:{title:'SBAS — Satellite Based Augmentation',id:0x16},
+  nmea:{title:'NMEA — Protocol settings',id:0x17},
   cfg:{title:'CFG — Save/Load receiver configuration',id:0x09}
 };
 function field(id,label,value,type='number',extra=''){return '<div class="ubx-field"><label for="'+id+'">'+label+'</label><input id="'+id+'" type="'+type+'" value="'+value+'" '+extra+'></div>';}
@@ -742,7 +744,7 @@ function selectUbxPage(page){
       selectField('msgUart2','Частота UART2','0',[['0','0 — выключено'],['1','1 — каждое решение'],['2','2 — каждое второе'],['5','5 — каждое пятое']])+
       selectField('msgUsb','Частота USB','0',[['0','0 — выключено'],['1','1 — каждое решение'],['2','2 — каждое второе'],['5','5 — каждое пятое']])+
       selectField('msgSpi','Частота SPI','0',[['0','0 — выключено'],['1','1 — каждое решение'],['2','2 — каждое второе'],['5','5 — каждое пятое']])+
-      '<p class="small">CFG-MSG u-blox 6: Poll = 2 байта (класс, ID); Set = 8 байт (класс, ID, reserved, DDC, UART1, UART2, USB, SPI).</p>';
+      '<p class="small">CFG-MSG u-blox 6: Poll = 2 байта (класс, ID); Set = 8 байт (класс, ID, DDC, UART1, UART2, USB, SPI, reserved).</p>';
   }
   if(page==='nav5'){
     f.innerHTML=selectField('navDyn','Dynamic platform model',0,[[0,'Portable'],[2,'Stationary'],[3,'Pedestrian'],[4,'Automotive'],[5,'Sea'],[6,'Airborne <1g'],[7,'Airborne <2g'],[8,'Airborne <4g']])+
@@ -785,12 +787,33 @@ function selectUbxPage(page){
       field('gnssSbasMax','Maximum SBAS channels (0–3)',3)+
       field('gnssSbasScan','SBAS scan mask (0 = automatic)',0,'number','min="0" max="4294967295"');
   }
+  if(page==='nmea'){
+    f.innerHTML=selectField('nmeaVersion','Версия NMEA',35,[[35,'2.3'],[33,'2.1']])+
+      field('nmeaMaxSv','Максимум спутников в NMEA (0 = без ограничения)',16)+
+      '<p class="small">Фильтры u-blox 6 CFG-NMEA. Отмеченный флаг отключает соответствующую фильтрацию (кроме SBAS, где флаг включает фильтрацию SBAS).</p>'+
+      checkField('nmeaPosFilter','Выводить позицию даже без фикса',false)+
+      checkField('nmeaMaskedFilter','Выводить позицию за пределами масок точности',false)+
+      checkField('nmeaTimeFilter','Выводить время даже при недостоверном времени',false)+
+      checkField('nmeaDateFilter','Выводить дату даже при недостоверной дате',false)+
+      checkField('nmeaSbasFilter','Фильтровать SBAS из NMEA',false)+
+      checkField('nmeaTrackFilter','Отключить фильтрацию курса (COG)',false)+
+      checkField('nmeaCompat','Compatibility mode',false)+
+      checkField('nmeaConsider','Consider mode',false);
+  }
   if(page==='cfg'){
-    f.innerHTML='<p>CFG-CFG — управление сохранением конфигурации в энергонезависимой памяти приёмника.</p>'+
-      checkField('cfgBbr','Сохранить в BBR',true)+
-      checkField('cfgFlash','Сохранить во Flash',true)+
-      checkField('cfgClear','Очистить перед сохранением',false)+
-      '<p class="small">Очистка конфигурации выполняется только при нажатии «Записать». Используйте Flash только если она предусмотрена платой приёмника.</p>';
+    const section=(prefix,label,defaults)=>'<h4>'+label+'</h4>'+
+      checkField(prefix+'Port','Порты I/O',defaults)+
+      checkField(prefix+'Messages','Конфигурация сообщений',defaults)+
+      checkField(prefix+'Info','INF-сообщения',defaults)+
+      checkField(prefix+'Navigation','Навигация (NAV/RATE/SBAS/NMEA)',defaults)+
+      checkField(prefix+'Rxm','Receiver Manager (RXM)',defaults)+
+      checkField(prefix+'Inventory','Remote Inventory',false)+
+      checkField(prefix+'Antenna','Антенна',false);
+    f.innerHTML='<p>CFG-CFG работает с разделами конфигурации, а не выбирает BBR/Flash. Сохранение выполняется во все доступные энергонезависимые носители приёмника.</p>'+
+      section('cfgSave','Сохранить текущие параметры',true)+
+      section('cfgClear','Сбросить разделы к заводским настройкам',false)+
+      section('cfgLoad','Загрузить сохранённые параметры',false)+
+      '<p class="small">Оставь Clear и Load пустыми для обычного сохранения. Не отмечай Clear без необходимости: это сбрасывает выбранные разделы.</p>';
   }
   if(page==='tp5'){
     f.innerHTML=selectField('tpIdx','Timepulse output',0,[[0,'TIMEPULSE'],[1,'TIMEPULSE2']])+
@@ -820,7 +843,7 @@ function payloadForPage(){
     const prn=Math.max(0,Math.min(0xFFFFFFFF,n('gnssSbasScan')))>>>0;
     return [mode,usage,Math.max(0,Math.min(3,n('gnssSbasMax'))),0,...u32(prn)];
   }
-  if(ubxPage==='msg')return [parseInt(document.getElementById('msgClass').value,16),parseInt(document.getElementById('msgId').value,16),0,n('msgI2c'),n('msgUart1'),n('msgUart2'),n('msgUsb'),n('msgSpi')];
+  if(ubxPage==='msg')return [parseInt(document.getElementById('msgClass').value,16),parseInt(document.getElementById('msgId').value,16),n('msgI2c'),n('msgUart1'),n('msgUart2'),n('msgUsb'),n('msgSpi'),0];
   if(ubxPage==='prt'){
     const port=n('prtPort'),baud=n('prtBaud');
     const dataBits=n('prtDataBits')===7?2:3;
@@ -847,13 +870,26 @@ function payloadForPage(){
     const prn=Math.max(0,Math.min(0xFFFFFFFF,n('gnssSbasScan')))>>>0;
     return [mode,usage,Math.max(0,Math.min(3,n('gnssSbasMax'))),0,...u32(prn)];
   }
+  if(ubxPage==='nmea'){
+    const filter=(ck('nmeaPosFilter')?1:0)|(ck('nmeaMaskedFilter')?2:0)|
+      (ck('nmeaTimeFilter')?4:0)|(ck('nmeaDateFilter')?8:0)|
+      (ck('nmeaSbasFilter')?16:0)|(ck('nmeaTrackFilter')?32:0);
+    const flags=(ck('nmeaCompat')?1:0)|(ck('nmeaConsider')?2:0);
+    return [filter,Number(document.getElementById('nmeaVersion').value),n('nmeaMaxSv'),flags];
+  }
   if(ubxPage==='cfg'){
-    const clear=ck('cfgClear')?0xFFFFFFFF:0;
-    const save=(ck('cfgBbr')?1:0)|(ck('cfgFlash')?2:0);
-    return [...u32(clear),...u32(save),...u32(0)];
+    const mask=prefix=>{
+      let value=0;
+      ['Port','Messages','Info','Navigation','Rxm','Inventory','Antenna'].forEach((name,bit)=>{
+        const e=document.getElementById(prefix+name);
+        if(e&&e.checked)value|=(1<<bit);
+      });
+      return value;
+    };
+    return [...u32(mask('cfgClear')), ...u32(mask('cfgSave')), ...u32(mask('cfgLoad'))];
   }
   if(ubxPage==='tp5'){
-    const flags=(ck('tpActive')?1:0)|(ck('tpLockGps')?2:0)|(ck('tpLockedOther')?4:0)|(ck('tpIsFreq')?8:0)|(ck('tpIsLength')?16:0)|(ck('tpAlign')?32:0)|(ck('tpPolarity')?64:0)|(Number(document.getElementById('tpGrid').value)?128:0);
+    const flags=(ck('tpActive')?1:0)|(ck('tpLockGps')?2:0)|(ck('tpLockedOther')?4:0)|(ck('tpIsFreq')?8:0)|(ck('tpIsLength')?16:0)|(ck('tpAlign')?32:0)|(ck('tpPolarity')?64:0)|((Number(document.getElementById('tpGrid').value)&0x0F)<<7);
     return [n('tpIdx'),0,0,0,...u16(n('tpAntDelay')),...u16(n('tpRfDelay')),...u32(n('tpFreq')),...u32(n('tpFreqLock')),...u32(n('tpPulse')),...u32(n('tpPulseLock')),...u32(n('tpUserDelay')),...u32(flags)];
   }
   return [];
@@ -867,7 +903,7 @@ async function pollUbxPage(){
   if(ubxPage==='msg')q=[parseInt(document.getElementById('msgClass').value,16),parseInt(document.getElementById('msgId').value,16)];
   if(ubxPage==='prt')q=[Number(document.getElementById('prtPort').value)];
   if(ubxPage==='tp5')q=[Number(document.getElementById('tpIdx').value)];
-  if(ubxPage==='sbas'||ubxPage==='cfg')q=[];
+  if(ubxPage==='sbas'||ubxPage==='cfg'||ubxPage==='nmea')q=[];
   const r=await sendUbxPacket(ubxPageInfo[ubxPage].id,q);
   document.getElementById('ubxStatus').textContent=r.ok?'Poll отправлен. Ожидаю ответ приёмника…':'Ошибка Poll';
   setTimeout(refreshUbxStatus,350);
@@ -903,9 +939,13 @@ function decodeUbxPage(frame){
     set('navPDop',readU16(p,14)/10);set('navTDop',readU16(p,16)/10);
     set('navPAcc',readU16(p,18));set('navTAcc',readU16(p,20));set('navStaticHold',p[22]);set('navDgpsTimeout',p[23]);
   }
-  if(ubxPage==='cfg'&&p.length>=12){
-    const save=readU32(p,4),clear=readU32(p,0);
-    check('cfgBbr',save&1);check('cfgFlash',save&2);check('cfgClear',clear!==0);
+  if(ubxPage==='nmea'&&p.length>=4){
+    const filter=p[0],flags=p[3];
+    check('nmeaPosFilter',filter&1);check('nmeaMaskedFilter',filter&2);
+    check('nmeaTimeFilter',filter&4);check('nmeaDateFilter',filter&8);
+    check('nmeaSbasFilter',filter&16);check('nmeaTrackFilter',filter&32);
+    set('nmeaVersion',p[1]);set('nmeaMaxSv',p[2]);
+    check('nmeaCompat',flags&1);check('nmeaConsider',flags&2);
   }
   if(ubxPage==='tp5'&&p.length>=32){
     set('tpIdx',p[0]);set('tpAntDelay',(p[4]|p[5]<<8)<<16>>16);set('tpRfDelay',(p[6]|p[7]<<8)<<16>>16);
@@ -914,7 +954,7 @@ function decodeUbxPage(frame){
     const flags=readU32(p,28);
     check('tpActive',flags&1);check('tpLockGps',flags&2);check('tpLockedOther',flags&4);
     check('tpIsFreq',flags&8);check('tpIsLength',flags&16);check('tpAlign',flags&32);check('tpPolarity',flags&64);
-    set('tpGrid',(flags&128)?1:0);
+    set('tpGrid',(flags>>7)&0x0F);
   }
 }
 async function refreshUbxStatus(){
