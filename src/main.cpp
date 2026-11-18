@@ -388,7 +388,7 @@ String aiJson() {
   doc["anomaly"] = aiMonitor.anomaly();
   doc["anomaly_code"] = aiMonitor.anomalyCode();
   doc["max_z_score"] = aiMonitor.maxZ();
-  doc["gnss_imu_mismatch"] = aiMonitor.mismatch();
+  doc["gnss_speed_position_mismatch"] = aiMonitor.mismatch();
   doc["speed_difference_mps"] = aiMonitor.mismatchSpeed();
   doc["hdop_trend"] = aiMonitor.hdopTrend();
   doc["snr_trend"] = aiMonitor.cnoTrend();
@@ -1103,14 +1103,14 @@ document.getElementById('imuData').textContent=
 async function refreshAi(){
   try{
     const d=await (await fetch('/ai/status?ts='+Date.now())).json();
-    const labels={learning:'Накопление профиля',normal:'Норма',degrading:'Качество ухудшается',anomaly:'Статистическое отклонение',integrity_warning:'Несогласованность GNSS / IMU',no_fix:'Нет фикса',limited_data:'Недостаточно данных',unknown:'Неизвестно'};
+    const labels={learning:'Накопление профиля',normal:'Норма',degrading:'Качество ухудшается',anomaly:'Статистическое отклонение',integrity_warning:'Несоответствие скорости и перемещения GNSS',no_fix:'Нет фикса',limited_data:'Недостаточно данных',unknown:'Неизвестно'};
     const motion={moving:'Движение (по GNSS)',vibration:'Вибрация / динамика',rotation:'Вращение',stationary_or_low_dynamics:'Покой или низкая динамика',imu_unavailable:'IMU недоступен',uncertain:'Неопределённо',unknown:'Неизвестно'};
     document.getElementById('aiStatus').textContent=d.trained?'Модель активна · профиль накоплен':'Модель активна · накопление профиля';
     document.getElementById('aiScore').textContent=d.quality_score>=0?d.quality_score+'/100':'—';
     document.getElementById('aiRisk').textContent=labels[d.risk]||d.risk;
     document.getElementById('aiSamples').textContent=String(d.samples);
     document.getElementById('aiAnomaly').textContent=d.anomaly?d.anomaly_code:'Не обнаружена';
-    document.getElementById('aiMismatch').textContent=d.gnss_imu_mismatch?'Есть расхождение':'Нет явного расхождения';
+    document.getElementById('aiMismatch').textContent=d.gnss_speed_position_mismatch?'Есть расхождение':'Нет явного расхождения';
     document.getElementById('aiMotion').textContent=motion[d.motion]||d.motion;
     document.getElementById('aiSnr').textContent=d.avg_gsv_snr>0?Number(d.avg_gsv_snr).toFixed(1)+' ('+d.snr_satellites+' спутн.)':'Нет данных';
     document.getElementById('aiHdopTrend').textContent=Number(d.hdop_trend).toFixed(2);
