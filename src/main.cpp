@@ -1678,7 +1678,7 @@ void loop() {
     satellites = 0; satellitesVisible = 0; hdop = 0.0;
   }
   if (lastGgaMs && millis() - lastGgaMs > 3000) satellites = 0;
-  if (lastGsvMs && millis() - lastGsvMs > 5000) satellitesVisible = 0;
+  if (lastGsvMs && millis() - lastGsvMs > 5000) { satellitesVisible = 0; gsvSnrCount = 0; avgGsvSnr = 0.0f; }
 
   if (nmeaSimulatorEnabled && millis() - lastSimulatorSentenceMs >= 1000) {
     lastSimulatorSentenceMs = millis();
