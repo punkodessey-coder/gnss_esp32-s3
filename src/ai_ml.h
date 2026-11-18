@@ -13,8 +13,8 @@ public:
       featureSamples_[i] = 0;
       mean_[i] = 0.0f;
       m2_[i] = 0.0f;
-      last_[i] = NAN;
     }
+    for (uint8_t i = 0; i < 3; ++i) last_[i] = NAN;
     qualityScore_ = -1;
     maxZ_ = 0.0f;
     anomaly_ = false;
