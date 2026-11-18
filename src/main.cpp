@@ -366,7 +366,7 @@ void logAiDatasetRow() {
   const float speed = gps.speed.isValid() ? gps.speed.mps() : NAN;
   const float accelMagnitude = imuReady ? sqrtf(ax*ax + ay*ay + az*az) : NAN;
   const float gyroMagnitude = imuReady ? sqrtf(gx*gx + gy*gy + gz*gz) : NAN;
-  file.printf("%lu,%u,%.7f,%.7f,%.3f,%.2f,%d,%d,%.2f,%.3f,%.3f,%d,%u,%s,%s,%s\\n",
+  file.printf("%lu,%u,%.7f,%.7f,%.3f,%.2f,%d,%d,%.2f,%.3f,%.3f,%d,%u,%s,%s,%s\n",
     (unsigned long)millis(), haveFix ? 1U : 0U, lat, lng, speed, hdop,
     satellites, satellitesVisible, gsvSnrCount ? avgGsvSnr : NAN,
     accelMagnitude, gyroMagnitude, aiMonitor.qualityScore(),
@@ -1104,7 +1104,7 @@ async function refreshAi(){
   try{
     const d=await (await fetch('/ai/status?ts='+Date.now())).json();
     const labels={learning:'Накопление профиля',normal:'Норма',degrading:'Качество ухудшается',anomaly:'Статистическое отклонение',integrity_warning:'Несогласованность GNSS / IMU',no_fix:'Нет фикса',limited_data:'Недостаточно данных',unknown:'Неизвестно'};
-    const motion={moving:'Движение (по GNSS)',vibration:'Вибрация / динамика',rotation:'Вращение',stationary_or_low_dynamics:'Покой или низкая динамика',uncertain:'Неопределённо',unknown:'Неизвестно'};
+    const motion={moving:'Движение (по GNSS)',vibration:'Вибрация / динамика',rotation:'Вращение',stationary_or_low_dynamics:'Покой или низкая динамика',imu_unavailable:'IMU недоступен',uncertain:'Неопределённо',unknown:'Неизвестно'};
     document.getElementById('aiStatus').textContent=d.trained?'Модель активна · профиль накоплен':'Модель активна · накопление профиля';
     document.getElementById('aiScore').textContent=d.quality_score>=0?d.quality_score+'/100':'—';
     document.getElementById('aiRisk').textContent=labels[d.risk]||d.risk;
@@ -1116,7 +1116,7 @@ async function refreshAi(){
     document.getElementById('aiHdopTrend').textContent=Number(d.hdop_trend).toFixed(2);
     document.getElementById('aiSnrTrend').textContent=Number(d.snr_trend).toFixed(1);
     document.getElementById('aiDetails').textContent='Модель: '+d.model_type+
-      '\\nКод отклонения: '+d.anomaly_code+
+      \nКод отклонения: '+d.anomaly_code+
       '\\nМаксимальное отклонение: '+Number(d.max_z_score).toFixed(2)+' σ'+
       '\\nРазница скоростей: '+Number(d.speed_difference_mps).toFixed(1)+' м/с'+
       '\\nHDOP: '+Number(d.hdop).toFixed(2)+' | спутников в решении: '+d.satellites_used+
@@ -1740,8 +1740,8 @@ void loop() {
     const float gyroMagnitude = imuReady ? sqrtf(gx*gx + gy*gy + gz*gz) : 0.0f;
     aiMonitor.update(haveFix, (float)hdop, satellites,
       gsvSnrCount ? avgGsvSnr : NAN, gpsSpeedMps,
-      accelMagnitude, gyroMagnitude, lat, lng,
-      imuReady, lat, lng, gps.location.isUpdated(), millis());
+      accelMagnitude, gyroMagnitude, imuReady, lat, lng,
+      gps.location.isUpdated(), millis());
     logAiDatasetRow();
   }
 
