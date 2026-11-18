@@ -36,6 +36,13 @@
 
 PlatformIO: основная конфигурация `esp32s3`, тест экрана — `display_test`.
 
+## AI / ML (feature/ai-ml-gnss)
+
+- Added the **AI / ML** web tab with an online GNSS/IMU anomaly baseline, signal/HDOP trends, movement labels, and GNSS position-speed consistency warnings.
+- Optional one-second CSV dataset logging to microSD: start/stop from the AI tab and download `/ai_dataset.csv`.
+- The current model is a lightweight online statistical detector, not yet a trained neural network. See [docs/AI_ML.md](docs/AI_ML.md) for behavior, usage, and limitations.
+- This branch does not include LoRa changes.
+
 ## Последние изменения в feature/gnss-config-manager
 
 - Спутники, используемые в решении, берутся из GGA с проверкой качества фикса; видимые спутники отдельно считаются из GSV. Устаревшие значения сбрасываются.
