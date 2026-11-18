@@ -545,11 +545,11 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <div class="card">
 <h2>AI / ML — мониторинг навигации</h2>
 <div id="aiStatus" class="small">Ожидание данных…</div>
-<div class="metric"><span>Оценка отклонения</span><strong id="aiScore">—</strong></div>
+<div class="metric"><span>Соответствие базовому профилю</span><strong id="aiScore">—</strong></div>
 <div class="metric"><span>Состояние модели</span><strong id="aiRisk">—</strong></div>
 <div class="metric"><span>Обучающие интервалы</span><strong id="aiSamples">0</strong></div>
 <div class="metric"><span>Аномалия</span><strong id="aiAnomaly">—</strong></div>
-<div class="metric"><span>GNSS / IMU mismatch</span><strong id="aiMismatch">—</strong></div>
+<div class="metric"><span>Несоответствие скорости и координат GNSS</span><strong id="aiMismatch">—</strong></div>
 <div class="metric"><span>Класс движения</span><strong id="aiMotion">—</strong></div>
 <div class="metric"><span>Средний GSV SNR</span><strong id="aiSnr">—</strong></div>
 <div class="metric"><span>Тренд HDOP</span><strong id="aiHdopTrend">—</strong></div>
@@ -1305,7 +1305,7 @@ void handleAiStatus() {
 }
 void handleAiReset() {
   aiMonitor.reset();
-  server.send(200, "application/json", "{\\"ok\\":true}");
+  server.send(200, "application/json", R"({"ok":true})");
 }
 void handleMaps() {
   server.sendHeader("Cache-Control", "no-store");
