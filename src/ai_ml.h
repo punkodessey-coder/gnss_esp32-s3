@@ -10,6 +10,7 @@ public:
   void reset() {
     samples_ = 0;
     for (uint8_t i = 0; i < 3; ++i) {
+      featureSamples_[i] = 0;
       mean_[i] = 0.0f;
       m2_[i] = 0.0f;
       last_[i] = NAN;
@@ -84,8 +85,8 @@ public:
     maxZ_ = 0.0f;
     anomalyCode_ = "normal";
     for (uint8_t i = 0; i < featureCount; ++i) {
-      if (samples_ >= 12) {
-        const float variance = (samples_ > 1) ? m2_[i] / (float)(samples_ - 1) : 0.0f;
+      if (featureSamples_[i] >= 12) {
+        const float variance = (featureSamples_[i] > 1) ? m2_[i] / (float)(featureSamples_[i] - 1) : 0.0f;
         const float sigma = sqrtf(fmaxf(variance, 0.04f));
         const float z = fabsf(features[i] - mean_[i]) / sigma;
         if (z > maxZ_) {
@@ -95,20 +96,22 @@ public:
       }
     }
 
-    anomaly_ = samples_ >= 12 && maxZ_ >= 3.5f;
+    bool baselineReady = featureSamples_[0] >= 12 && featureSamples_[1] >= 12;
+    anomaly_ = baselineReady && maxZ_ >= 3.5f;
     if (!anomaly_) {
-      // Welford online update. Freeze baseline while an outlier is present so
-      // one bad interval cannot immediately teach the model that it is normal.
+      // Welford online update uses independent counters because GSV SNR can
+      // be absent on some receivers or sentences.
       ++samples_;
       for (uint8_t i = 0; i < featureCount; ++i) {
+        ++featureSamples_[i];
         const float delta = features[i] - mean_[i];
-        mean_[i] += delta / (float)samples_;
+        mean_[i] += delta / (float)featureSamples_[i];
         const float delta2 = features[i] - mean_[i];
         m2_[i] += delta * delta2;
       }
     }
 
-    if (samples_ < 12) {
+    if (!baselineReady) {
       qualityScore_ = -1;
       risk_ = "learning";
     } else {
@@ -140,10 +143,11 @@ public:
   const char* motion() const { return motion_; }
   float hdopTrend() const { return hdopTrend_; }
   float cnoTrend() const { return cnoTrend_; }
-  bool trained() const { return samples_ >= 12; }
+  bool trained() const { return featureSamples_[0] >= 12 && featureSamples_[1] >= 12; }
 
 private:
   uint32_t samples_ = 0;
+  uint32_t featureSamples_[3] = {0, 0, 0};
   float mean_[3] = {0, 0, 0};
   float m2_[3] = {0, 0, 0};
   float last_[3] = {NAN, NAN, NAN};
