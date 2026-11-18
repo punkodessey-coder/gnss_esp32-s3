@@ -9,7 +9,7 @@ class GnssAiMonitor {
 public:
   void reset() {
     samples_ = 0;
-    for (uint8_t i = 0; i < 3; ++i) {
+    for (uint8_t i = 0; i < 5; ++i) {
       featureSamples_[i] = 0;
       mean_[i] = 0.0f;
       m2_[i] = 0.0f;
@@ -78,31 +78,34 @@ public:
 
     // Feature vector: HDOP, satellites used, average GSV SNR/CN0 proxy.
     // NMEA GSV SNR is not identical to calibrated receiver C/N0 telemetry.
-    float features[3] = { hdop, (float)used, avgCno };
     const bool cnoAvailable = isfinite(avgCno) && avgCno > 0.0f;
-    const uint8_t featureCount = cnoAvailable ? 3 : 2;
+    const float dynamicAccel = fabsf(accelMagnitude - 9.80665f);
+    float features[5] = { hdop, (float)used, avgCno, dynamicAccel, gyroMagnitude };
 
     maxZ_ = 0.0f;
     anomalyCode_ = "normal";
-    for (uint8_t i = 0; i < featureCount; ++i) {
+    for (uint8_t i = 0; i < 5; ++i) {
+      if (i == 2 && !cnoAvailable) continue;
       if (featureSamples_[i] >= 12) {
         const float variance = (featureSamples_[i] > 1) ? m2_[i] / (float)(featureSamples_[i] - 1) : 0.0f;
         const float sigma = sqrtf(fmaxf(variance, 0.04f));
         const float z = fabsf(features[i] - mean_[i]) / sigma;
         if (z > maxZ_) {
           maxZ_ = z;
-          anomalyCode_ = (i == 0) ? "hdop_deviation" : (i == 1) ? "satellite_count_deviation" : "signal_level_deviation";
+          anomalyCode_ = (i == 0) ? "hdop_deviation" :
+            (i == 1) ? "satellite_count_deviation" :
+            (i == 2) ? "signal_level_deviation" :
+            (i == 3) ? "imu_acceleration_deviation" : "imu_gyro_deviation";
         }
       }
     }
 
-    bool baselineReady = featureSamples_[0] >= 12 && featureSamples_[1] >= 12;
+    const bool baselineReady = featureSamples_[0] >= 12 && featureSamples_[1] >= 12;
     anomaly_ = baselineReady && maxZ_ >= 3.5f;
     if (!anomaly_) {
-      // Welford online update uses independent counters because GSV SNR can
-      // be absent on some receivers or sentences.
       ++samples_;
-      for (uint8_t i = 0; i < featureCount; ++i) {
+      for (uint8_t i = 0; i < 5; ++i) {
+        if (i == 2 && !cnoAvailable) continue;
         ++featureSamples_[i];
         const float delta = features[i] - mean_[i];
         mean_[i] += delta / (float)featureSamples_[i];
@@ -147,9 +150,9 @@ public:
 
 private:
   uint32_t samples_ = 0;
-  uint32_t featureSamples_[3] = {0, 0, 0};
-  float mean_[3] = {0, 0, 0};
-  float m2_[3] = {0, 0, 0};
+  uint32_t featureSamples_[5] = {0, 0, 0, 0, 0};
+  float mean_[5] = {0, 0, 0, 0, 0};
+  float m2_[5] = {0, 0, 0, 0, 0};
   float last_[3] = {NAN, NAN, NAN};
   int qualityScore_ = -1;
   float maxZ_ = 0.0f;
