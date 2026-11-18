@@ -33,14 +33,15 @@ public:
 
   void update(bool fix, float hdop, int used, float avgCno,
               float gpsSpeedMps, float accelMagnitude, float gyroMagnitude,
-              double lat, double lon, bool positionUpdated, uint32_t nowMs) {
+              bool imuAvailable, double lat, double lon, bool positionUpdated, uint32_t nowMs) {
     if (nowMs - lastUpdateMs_ < 900) return;
     lastUpdateMs_ = nowMs;
 
     // Motion class is deliberately conservative: a 6-axis IMU cannot determine
     // absolute heading or distinguish all forms of constant-velocity motion.
     const float dynamicAccel = fabsf(accelMagnitude - 9.80665f);
-    if (fix && gpsSpeedMps > 1.0f) motion_ = "moving";
+    if (!imuAvailable) motion_ = "imu_unavailable";
+    else if (fix && gpsSpeedMps > 1.0f) motion_ = "moving";
     else if (dynamicAccel > 2.2f) motion_ = "vibration";
     else if (gyroMagnitude > 12.0f) motion_ = "rotation";
     else if (accelMagnitude > 7.5f && accelMagnitude < 12.2f && gyroMagnitude < 4.0f) motion_ = "stationary_or_low_dynamics";
@@ -79,13 +80,12 @@ public:
     // Feature vector: HDOP, satellites used, average GSV SNR/CN0 proxy.
     // NMEA GSV SNR is not identical to calibrated receiver C/N0 telemetry.
     const bool cnoAvailable = isfinite(avgCno) && avgCno > 0.0f;
-    const float dynamicAccel = fabsf(accelMagnitude - 9.80665f);
     float features[5] = { hdop, (float)used, avgCno, dynamicAccel, gyroMagnitude };
 
     maxZ_ = 0.0f;
     anomalyCode_ = "normal";
     for (uint8_t i = 0; i < 5; ++i) {
-      if (i == 2 && !cnoAvailable) continue;
+      if ((i == 2 && !cnoAvailable) || (i >= 3 && !imuAvailable)) continue;
       if (featureSamples_[i] >= 12) {
         const float variance = (featureSamples_[i] > 1) ? m2_[i] / (float)(featureSamples_[i] - 1) : 0.0f;
         const float sigma = sqrtf(fmaxf(variance, 0.04f));
@@ -105,7 +105,7 @@ public:
     if (!anomaly_) {
       ++samples_;
       for (uint8_t i = 0; i < 5; ++i) {
-        if (i == 2 && !cnoAvailable) continue;
+        if ((i == 2 && !cnoAvailable) || (i >= 3 && !imuAvailable)) continue;
         ++featureSamples_[i];
         const float delta = features[i] - mean_[i];
         mean_[i] += delta / (float)featureSamples_[i];
