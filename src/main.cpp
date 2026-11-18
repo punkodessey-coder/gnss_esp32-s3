@@ -4,6 +4,7 @@
 #include <Wire.h>
 #include <TinyGPSPlus.h>
 #include <ArduinoJson.h>
+#include "ai_ml.h"
 #include <Preferences.h>
 #include <Arduino_GFX_Library.h>
 #include <ImuDrv.hpp>
@@ -68,6 +69,9 @@ double altitude = 0.0;
 int satellites = 0; // satellites used by a valid GGA fix
 int satellitesVisible = 0; // satellites reported by GSV
 double hdop = 0.0;
+float avgGsvSnr = 0.0f;
+uint8_t gsvSnrCount = 0;
+GnssAiMonitor aiMonitor;
 unsigned long lastFixMs = 0;
 unsigned long lastGgaMs = 0;
 unsigned long lastGsvMs = 0;
@@ -311,6 +315,16 @@ void processNmeaLine(const String& line) {
   } else if (type == "GSV") {
     const int visible = nmeaField(line, 3).toInt();
     satellitesVisible = constrain(visible, 0, 99);
+    float snrSum = 0.0f;
+    uint8_t snrCount = 0;
+    for (uint8_t field = 7; field < 23; field += 4) {
+      String snrText = nmeaField(line, field);
+      if (snrText.length()) {
+        const int snr = snrText.toInt();
+        if (snr > 0 && snr <= 99) { snrSum += snr; ++snrCount; }
+      }
+    }
+    if (snrCount) { avgGsvSnr = snrSum / snrCount; gsvSnrCount = snrCount; }
     lastGsvMs = millis();
   }
 }
@@ -337,6 +351,35 @@ String imuJson() {
   doc["accel_range_g"] = 8;
   doc["gyro_range_dps"] = 1000;
   doc["sample_rate_hz"] = 250;
+  String out; serializeJson(doc, out); return out;
+}
+
+String aiJson() {
+  JsonDocument doc;
+  doc["enabled"] = true;
+  doc["model"] = "online-statistical-v1";
+  doc["model_type"] = "Welford online anomaly detector";
+  doc["trained"] = aiMonitor.trained();
+  doc["samples"] = aiMonitor.samples();
+  doc["quality_score"] = aiMonitor.qualityScore();
+  doc["risk"] = aiMonitor.risk();
+  doc["motion"] = aiMonitor.motion();
+  doc["anomaly"] = aiMonitor.anomaly();
+  doc["anomaly_code"] = aiMonitor.anomalyCode();
+  doc["max_z_score"] = aiMonitor.maxZ();
+  doc["gnss_imu_mismatch"] = aiMonitor.mismatch();
+  doc["speed_difference_mps"] = aiMonitor.mismatchSpeed();
+  doc["hdop_trend"] = aiMonitor.hdopTrend();
+  doc["snr_trend"] = aiMonitor.cnoTrend();
+  doc["avg_gsv_snr"] = avgGsvSnr;
+  doc["snr_satellites"] = gsvSnrCount;
+  doc["fix"] = haveFix;
+  doc["hdop"] = hdop;
+  doc["satellites_used"] = satellites;
+  doc["satellites_visible"] = satellitesVisible;
+  doc["gps_speed_mps"] = gps.speed.isValid() ? gps.speed.mps() : 0.0f;
+  doc["imu_ready"] = imuReady;
+  doc["note"] = "Statistical anomaly score; not proof of jamming or spoofing.";
   String out; serializeJson(doc, out); return out;
 }
 
@@ -418,6 +461,7 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <button id="tabUartBtn" class="tab" onclick="showTab('uart')">UART</button>
 <button id="tabUbxBtn" class="tab" onclick="showTab('ubx')">u-blox</button>
 <button id="tabPointsBtn" class="tab" onclick="showTab('points')">Точки</button>
+<button id="tabAiBtn" class="tab" onclick="showTab('ai')">AI / ML</button>
 </div>
 
 <div id="gpsTab">
@@ -497,6 +541,25 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <details><summary>Последний ответ приёмника (диагностика)</summary><pre id="ubxFrame" class="coords">—</pre></details>
 </section></div></div></div>
 <div id="pointsTab" class="hidden"><div class="card"><h2>Сохранённые точки</h2><div class="small">Название и координаты сохранённых местоположений</div><div id="savedPointsList" class="small">Загрузка…</div></div></div>
+<div id="aiTab" class="hidden">
+<div class="card">
+<h2>AI / ML — мониторинг навигации</h2>
+<div id="aiStatus" class="small">Ожидание данных…</div>
+<div class="metric"><span>Оценка отклонения</span><strong id="aiScore">—</strong></div>
+<div class="metric"><span>Состояние модели</span><strong id="aiRisk">—</strong></div>
+<div class="metric"><span>Обучающие интервалы</span><strong id="aiSamples">0</strong></div>
+<div class="metric"><span>Аномалия</span><strong id="aiAnomaly">—</strong></div>
+<div class="metric"><span>GNSS / IMU mismatch</span><strong id="aiMismatch">—</strong></div>
+<div class="metric"><span>Класс движения</span><strong id="aiMotion">—</strong></div>
+<div class="metric"><span>Средний GSV SNR</span><strong id="aiSnr">—</strong></div>
+<div class="metric"><span>Тренд HDOP</span><strong id="aiHdopTrend">—</strong></div>
+<div class="metric"><span>Тренд SNR</span><strong id="aiSnrTrend">—</strong></div>
+<pre id="aiDetails" class="coords">Модель собирает исходный профиль приёма…</pre>
+<button class="gray" onclick="resetAiModel()">Сбросить профиль модели</button>
+<div class="small">Локальная статистическая ML-модель с онлайн-обучением. Отклонения не доказывают глушение или spoofing. GSV SNR — приближённый уровень сигнала, не калиброванный C/N₀.</div>
+</div>
+</div>
+
 <div id="imuTab" class="hidden">
 <div class="card"><h2>QMI8658 — состояние и идентификация</h2><div id="imuStatus" class="small">Ожидание данных…</div><pre id="imuData" class="imu">—</pre></div>
 <div class="card"><h3>Калибровка гироскопа</h3><div class="small">Положите плату неподвижно на ровную поверхность во время калибровки.</div><button onclick="calibrateZero()">Откалибровать смещение</button><button class="gray" onclick="resetCalibration()">Сбросить калибровку</button></div>
@@ -517,11 +580,13 @@ document.getElementById('imuTab').classList.toggle('hidden',name!=='imu');
 document.getElementById('uartTab').classList.toggle('hidden',name!=='uart');
 document.getElementById('ubxTab').classList.toggle('hidden',name!=='ubx');
 document.getElementById('pointsTab').classList.toggle('hidden',name!=='points');
+document.getElementById('aiTab').classList.toggle('hidden',name!=='ai');
 document.getElementById('tabGpsBtn').classList.toggle('active',name==='gps');
 document.getElementById('tabImuBtn').classList.toggle('active',name==='imu');
 document.getElementById('tabUartBtn').classList.toggle('active',name==='uart');
 document.getElementById('tabUbxBtn').classList.toggle('active',name==='ubx');
 document.getElementById('tabPointsBtn').classList.toggle('active',name==='points');
+document.getElementById('tabAiBtn').classList.toggle('active',name==='ai');
 if(name==='gps'){
   if(map) setTimeout(()=>map.invalidateSize(),150);
   if(yandexMap) setTimeout(()=>yandexMap.container.fitToViewport(),150);
@@ -1008,6 +1073,34 @@ document.getElementById('imuData').textContent=
 }catch(e){document.getElementById('imuStatus').textContent='Ошибка чтения IMU: '+e.message;}
 }
 
+async function refreshAi(){
+  try{
+    const d=await (await fetch('/ai/status?ts='+Date.now())).json();
+    const labels={learning:'Накопление профиля',normal:'Норма',degrading:'Качество ухудшается',anomaly:'Статистическое отклонение',integrity_warning:'Несогласованность GNSS / IMU',no_fix:'Нет фикса',limited_data:'Недостаточно данных',unknown:'Неизвестно'};
+    const motion={moving:'Движение (по GNSS)',vibration:'Вибрация / динамика',rotation:'Вращение',stationary_or_low_dynamics:'Покой или низкая динамика',uncertain:'Неопределённо',unknown:'Неизвестно'};
+    document.getElementById('aiStatus').textContent=d.trained?'Модель активна · профиль накоплен':'Модель активна · накопление профиля';
+    document.getElementById('aiScore').textContent=d.quality_score>=0?d.quality_score+'/100':'—';
+    document.getElementById('aiRisk').textContent=labels[d.risk]||d.risk;
+    document.getElementById('aiSamples').textContent=String(d.samples);
+    document.getElementById('aiAnomaly').textContent=d.anomaly?d.anomaly_code:'Не обнаружена';
+    document.getElementById('aiMismatch').textContent=d.gnss_imu_mismatch?'Есть расхождение':'Нет явного расхождения';
+    document.getElementById('aiMotion').textContent=motion[d.motion]||d.motion;
+    document.getElementById('aiSnr').textContent=d.avg_gsv_snr>0?Number(d.avg_gsv_snr).toFixed(1)+' ('+d.snr_satellites+' спутн.)':'Нет данных';
+    document.getElementById('aiHdopTrend').textContent=Number(d.hdop_trend).toFixed(2);
+    document.getElementById('aiSnrTrend').textContent=Number(d.snr_trend).toFixed(1);
+    document.getElementById('aiDetails').textContent='Модель: '+d.model_type+
+      '\\nКод отклонения: '+d.anomaly_code+
+      '\\nМаксимальное отклонение: '+Number(d.max_z_score).toFixed(2)+' σ'+
+      '\\nРазница скоростей: '+Number(d.speed_difference_mps).toFixed(1)+' м/с'+
+      '\\nHDOP: '+Number(d.hdop).toFixed(2)+' | спутников в решении: '+d.satellites_used+
+      '\\nПримечание: '+d.note;
+  }catch(e){document.getElementById('aiStatus').textContent='Ошибка AI-статуса: '+e.message;}
+}
+async function resetAiModel(){
+  try{const r=await fetch('/ai/reset',{method:'POST'});if(!r.ok)throw new Error('HTTP '+r.status);refreshAi();}
+  catch(e){document.getElementById('aiStatus').textContent='Ошибка сброса: '+e.message;}
+}
+
 async function startNmeaSimulator(){
  try{
   const r=await fetch('/simulator/start',{method:'POST'});
@@ -1072,6 +1165,7 @@ setInterval(()=>{if(!document.getElementById('gpsTab').classList.contains('hidde
 setInterval(()=>{if(!document.getElementById('imuTab').classList.contains('hidden'))refreshImu();},200);
 setInterval(()=>{if(!document.getElementById('uartTab').classList.contains('hidden'))refreshUart();},500);
 setInterval(()=>{if(!document.getElementById('ubxTab').classList.contains('hidden'))refreshUbxStatus();},500);
+setInterval(()=>{if(!document.getElementById('aiTab').classList.contains('hidden'))refreshAi();},1000);
 refreshUart();
 selectUbxPage('gnss');
 loadMaps();
@@ -1205,6 +1299,14 @@ void handleImu() {
   server.send(200, "application/json", imuJson());
 }
 
+void handleAiStatus() {
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", aiJson());
+}
+void handleAiReset() {
+  aiMonitor.reset();
+  server.send(200, "application/json", "{\\"ok\\":true}");
+}
 void handleMaps() {
   server.sendHeader("Cache-Control", "no-store");
   server.send(200, "application/json", mapsJson());
@@ -1317,6 +1419,7 @@ void updateDisplay() {
 }
 void setup() {
   Serial.begin(115200);
+  aiMonitor.reset();
 
   pinMode(LCD_BL, OUTPUT);
   digitalWrite(LCD_BL, HIGH);
@@ -1388,6 +1491,8 @@ void setup() {
   server.on("/ubx/send", HTTP_POST, handleUbxSend);
   server.on("/ubx/status", HTTP_GET, handleUbxStatus);
   server.on("/imu", HTTP_GET, handleImu);
+  server.on("/ai/status", HTTP_GET, handleAiStatus);
+  server.on("/ai/reset", HTTP_POST, handleAiReset);
   server.on("/uart", HTTP_GET, handleUart);
   server.on("/maps", HTTP_GET, handleMaps);
   server.on("/maps/yandex-key", HTTP_GET, handleYandexKeyGet);
@@ -1565,6 +1670,18 @@ void loop() {
   if (millis() - lastImu > 20) {
     lastImu = millis();
     readImu();
+  }
+
+  static unsigned long lastAi = 0;
+  if (millis() - lastAi >= 1000) {
+    lastAi = millis();
+    const float gpsSpeedMps = gps.speed.isValid() ? gps.speed.mps() : 0.0f;
+    const float accelMagnitude = imuReady ? sqrtf(ax*ax + ay*ay + az*az) : 0.0f;
+    const float gyroMagnitude = imuReady ? sqrtf(gx*gx + gy*gy + gz*gz) : 0.0f;
+    aiMonitor.update(haveFix, (float)hdop, satellites,
+      gsvSnrCount ? avgGsvSnr : NAN, gpsSpeedMps,
+      accelMagnitude, gyroMagnitude, lat, lng,
+      gps.location.isUpdated(), millis());
   }
 
   static unsigned long lastBle = 0;
