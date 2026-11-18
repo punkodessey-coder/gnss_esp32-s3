@@ -72,6 +72,8 @@ double hdop = 0.0;
 float avgGsvSnr = 0.0f;
 uint8_t gsvSnrCount = 0;
 GnssAiMonitor aiMonitor;
+bool sdReady = false;
+bool aiLoggingEnabled = false;
 unsigned long lastFixMs = 0;
 unsigned long lastGgaMs = 0;
 unsigned long lastGsvMs = 0;
@@ -354,6 +356,25 @@ String imuJson() {
   String out; serializeJson(doc, out); return out;
 }
 
+void logAiDatasetRow() {
+  if (!aiLoggingEnabled || !sdReady) return;
+  File file = SD_MMC.open("/ai_dataset.csv", FILE_APPEND);
+  if (!file) return;
+  if (file.size() == 0) {
+    file.println("millis,fix,lat,lon,speed_mps,hdop,sat_used,sat_visible,gsv_snr_avg,accel_magnitude,gyro_magnitude,profile_score,anomaly,anomaly_code,risk,motion");
+  }
+  const float speed = gps.speed.isValid() ? gps.speed.mps() : NAN;
+  const float accelMagnitude = imuReady ? sqrtf(ax*ax + ay*ay + az*az) : NAN;
+  const float gyroMagnitude = imuReady ? sqrtf(gx*gx + gy*gy + gz*gz) : NAN;
+  file.printf("%lu,%u,%.7f,%.7f,%.3f,%.2f,%d,%d,%.2f,%.3f,%.3f,%d,%u,%s,%s,%s\\n",
+    (unsigned long)millis(), haveFix ? 1U : 0U, lat, lng, speed, hdop,
+    satellites, satellitesVisible, gsvSnrCount ? avgGsvSnr : NAN,
+    accelMagnitude, gyroMagnitude, aiMonitor.qualityScore(),
+    aiMonitor.anomaly() ? 1U : 0U, aiMonitor.anomalyCode(),
+    aiMonitor.risk(), aiMonitor.motion());
+  file.close();
+}
+
 String aiJson() {
   JsonDocument doc;
   doc["enabled"] = true;
@@ -556,6 +577,12 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <div class="metric"><span>Тренд SNR</span><strong id="aiSnrTrend">—</strong></div>
 <pre id="aiDetails" class="coords">Модель собирает исходный профиль приёма…</pre>
 <button class="gray" onclick="resetAiModel()">Сбросить профиль модели</button>
+<div class="ubx-actions">
+<button onclick="setAiLogging(true)">Начать запись CSV</button>
+<button class="gray" onclick="setAiLogging(false)">Остановить запись</button>
+<a href="/ai/dataset" style="color:#8ab4ff;padding:10px">Скачать CSV</a>
+</div>
+<div id="aiLogStatus" class="small">Запись набора данных выключена</div>
 <div class="small">Локальная статистическая ML-модель с онлайн-обучением. Отклонения не доказывают глушение или spoofing. GSV SNR — приближённый уровень сигнала, не калиброванный C/N₀.</div>
 </div>
 </div>
@@ -1096,6 +1123,14 @@ async function refreshAi(){
       '\\nПримечание: '+d.note;
   }catch(e){document.getElementById('aiStatus').textContent='Ошибка AI-статуса: '+e.message;}
 }
+async function setAiLogging(enabled){
+  try{
+    const r=await fetch('/ai/logging?enabled='+(enabled?'1':'0'),{method:'POST'});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.error||('HTTP '+r.status));
+    document.getElementById('aiLogStatus').textContent=d.enabled?'Запись включена: /ai_dataset.csv':'Запись остановлена';
+  }catch(e){document.getElementById('aiLogStatus').textContent='Ошибка записи CSV: '+e.message;}
+}
 async function resetAiModel(){
   try{const r=await fetch('/ai/reset',{method:'POST'});if(!r.ok)throw new Error('HTTP '+r.status);refreshAi();}
   catch(e){document.getElementById('aiStatus').textContent='Ошибка сброса: '+e.message;}
@@ -1307,6 +1342,28 @@ void handleAiReset() {
   aiMonitor.reset();
   server.send(200, "application/json", R"({"ok":true})");
 }
+void handleAiLogging() {
+  const bool enabled = server.arg("enabled") == "1";
+  if (enabled && !sdReady) {
+    server.send(503, "application/json", R"({"enabled":false,"error":"microSD недоступна"})");
+    return;
+  }
+  aiLoggingEnabled = enabled;
+  JsonDocument doc; doc["enabled"] = aiLoggingEnabled;
+  String out; serializeJson(doc, out);
+  server.send(200, "application/json", out);
+}
+void handleAiDataset() {
+  if (!sdReady || !SD_MMC.exists("/ai_dataset.csv")) {
+    server.send(404, "text/plain; charset=utf-8", "CSV пока не создан");
+    return;
+  }
+  File file = SD_MMC.open("/ai_dataset.csv", FILE_READ);
+  if (!file) { server.send(500, "text/plain", "Не удалось открыть CSV"); return; }
+  server.sendHeader("Content-Disposition", "attachment; filename=ai_dataset.csv");
+  server.streamFile(file, "text/csv");
+  file.close();
+}
 void handleMaps() {
   server.sendHeader("Cache-Control", "no-store");
   server.send(200, "application/json", mapsJson());
@@ -1473,6 +1530,7 @@ void setup() {
 
   SD_MMC.setPins(14, 15, 16, 18, 17, 21); // CLK, CMD, D0, D1, D2, D3
   if (SD_MMC.begin(SD_MOUNT, true)) {
+    sdReady = true;
     Serial.println("SD card mounted");
   } else {
     Serial.println("SD card not mounted");
@@ -1493,6 +1551,8 @@ void setup() {
   server.on("/imu", HTTP_GET, handleImu);
   server.on("/ai/status", HTTP_GET, handleAiStatus);
   server.on("/ai/reset", HTTP_POST, handleAiReset);
+  server.on("/ai/logging", HTTP_POST, handleAiLogging);
+  server.on("/ai/dataset", HTTP_GET, handleAiDataset);
   server.on("/uart", HTTP_GET, handleUart);
   server.on("/maps", HTTP_GET, handleMaps);
   server.on("/maps/yandex-key", HTTP_GET, handleYandexKeyGet);
@@ -1681,7 +1741,8 @@ void loop() {
     aiMonitor.update(haveFix, (float)hdop, satellites,
       gsvSnrCount ? avgGsvSnr : NAN, gpsSpeedMps,
       accelMagnitude, gyroMagnitude, lat, lng,
-      gps.location.isUpdated(), millis());
+      imuReady, lat, lng, gps.location.isUpdated(), millis());
+    logAiDatasetRow();
   }
 
   static unsigned long lastBle = 0;
