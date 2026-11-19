@@ -734,7 +734,7 @@ async function saveFixTimeout(){
     document.getElementById('mapStatus').textContent='Тайм-аут потери координат: '+seconds+' с';
   }catch(e){document.getElementById('mapStatus').textContent='Не удалось сохранить тайм-аут: '+e.message;}
 }
-async function refreshSavedPoints(){async function refreshSavedPoints(){
+async function refreshSavedPoints(){
  try{
   const points=await (await fetch('/points')).json();
   const list=document.getElementById('savedPointsList');
@@ -790,7 +790,7 @@ try{
   else if(map) updateLeafletPoint(lat,lng);
 }catch(e){}
 }
-async function changeUartBaud(value){async function changeUartBaud(value){
+async function changeUartBaud(value){
  const r=await fetch('/uart/baud?baud='+encodeURIComponent(value),{method:'POST'});
  document.getElementById('uartStatus').textContent=r.ok?'Скорость UART изменена на '+value+' бод':'Не удалось изменить скорость UART';
  refreshUart();
@@ -1066,7 +1066,7 @@ async function refreshUbxStatus(){
     }else if(d.event)document.getElementById('ubxStatus').textContent=d.event;
   }catch(e){}
 }
-async function refreshUart(){async function refreshUart(){
+async function refreshUart(){
  const status=document.getElementById('uartStatus');
  try{
   // Query token avoids stale responses and avoids Safari RequestInit/cache quirks.
@@ -1116,7 +1116,7 @@ async function refreshAi(){
     document.getElementById('aiHdopTrend').textContent=Number(d.hdop_trend).toFixed(2);
     document.getElementById('aiSnrTrend').textContent=Number(d.snr_trend).toFixed(1);
     document.getElementById('aiDetails').textContent='Модель: '+d.model_type+
-      \nКод отклонения: '+d.anomaly_code+
+      '\\nКод отклонения: '+d.anomaly_code+
       '\\nМаксимальное отклонение: '+Number(d.max_z_score).toFixed(2)+' σ'+
       '\\nРазница скоростей: '+Number(d.speed_difference_mps).toFixed(1)+' м/с'+
       '\\nHDOP: '+Number(d.hdop).toFixed(2)+' | спутников в решении: '+d.satellites_used+
