@@ -28,8 +28,9 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           source = Path("src/main.cpp").read_text(encoding="utf-8")
-          start = source.index("\n<script>\n") + len("\n<script>\n")
-          end = source.index("\n</script>", start)
+          marker = "<script>" + chr(10)
+          start = source.index(marker) + len(marker)
+          end = source.index("</script>", start)
           Path("/tmp/gnss-ui.js").write_text(source[start:end], encoding="utf-8")
           PY
           node --check /tmp/gnss-ui.js
