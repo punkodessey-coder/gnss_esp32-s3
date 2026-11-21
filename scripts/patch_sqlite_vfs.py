@@ -22,6 +22,9 @@ if "#define _LARGEFILE64_SOURCE" not in source:
 
 # Keep the operations consistent: large-file streams must be opened with fopen64.
 source = source.replace("fopen(", "fopen64(")
+# stat() is also used while opening a database; use the matching 64-bit structure/API.
+source = source.replace("struct stat st;", "struct stat64 st;")
+source = source.replace("stat( zName, &st )", "stat64( zName, &st )")
 source = source.replace("fseek(p->fp, iOfst, SEEK_SET)", "fseeko64(p->fp, (_off64_t)iOfst, SEEK_SET)")
 source = source.replace("struct stat st;", "struct stat64 st;")
 source = source.replace("fstat(fno, &st)", "fstat64(fno, &st)")
