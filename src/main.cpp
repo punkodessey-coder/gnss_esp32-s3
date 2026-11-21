@@ -774,9 +774,14 @@ async function selectMap(value){
   else if(value==='online:topo')tileLayer=L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',{maxZoom:17,attribution:'&copy; OpenTopoMap'});
   else if(value.startsWith('sd:')){
     const name=value.substring(3);
-    try{const infoResponse=await fetch('/maps/info?map='+encodeURIComponent(name)+'&ts='+Date.now());if(!infoResponse.ok)throw new Error('HTTP '+infoResponse.status);const info=await infoResponse.json();const nativeZoom=Number.isInteger(info.maxZoom)?info.maxZoom:16;
+    try{
+      const infoResponse=await fetch('/maps/info?map='+encodeURIComponent(name)+'&ts='+Date.now(),{cache:'no-store'});
+      const infoBody=await infoResponse.text();let info={};try{info=JSON.parse(infoBody);}catch(e){}
+      if(!infoResponse.ok||!info.db_open)throw new Error((info.sqlite_error||info.error||('HTTP '+infoResponse.status+' '+infoBody.slice(0,180)))+' | SQLite rc='+(info.sqlite_rc??'—'));
+      const nativeZoom=Number.isInteger(info.maxZoom)?info.maxZoom:16;
       tileLayer=L.tileLayer('/tiles?map='+encodeURIComponent(name)+'&z={z}&x={x}&y={y}',{minZoom:0,maxZoom:19,maxNativeZoom:nativeZoom,attribution:'Offline map'});
-    }catch(e){setMapStatus('Ошибка проверки MBTiles: '+e.message,'error');return;}
+      setMapStatus('MBTiles OK · '+Number(info.tile_count||0).toLocaleString('ru-RU')+' тайлов · zoom '+info.min_zoom+'–'+nativeZoom,'good');
+    }catch(e){setMapStatus('Ошибка MBTiles: '+e.message,'error');return;}
   }
   if(!tileLayer){setMapStatus('Неизвестный тип карты','error');return;}
   attachTileProgress(tileLayer,token,value.startsWith('sd:')?'Офлайн '+value.substring(3):'Онлайн '+value.substring(7).toUpperCase());
@@ -885,8 +890,10 @@ async function testMbtiles(){
  const out=document.getElementById('mbtilesTestResult'),name=document.getElementById('mbtilesTestMap').value;
  if(!name){out.textContent='Сначала выберите офлайн-карту';return;}out.textContent='Проверяю открытие базы…';
  try{
-  const ir=await fetch('/maps/info?map='+encodeURIComponent(name)+'&ts='+Date.now());if(!ir.ok)throw new Error('Метаданные: HTTP '+ir.status);
-  const info=await ir.json(),z=Math.max(0,Math.min(Number(info.maxZoom)||9,name==='world'?9:11));
+  const ir=await fetch('/maps/info?map='+encodeURIComponent(name)+'&ts='+Date.now(),{cache:'no-store'});
+  const infoText=await ir.text();let info={};try{info=JSON.parse(infoText);}catch(e){}
+  if(!ir.ok||!info.db_open)throw new Error((info.sqlite_error||info.error||('Метаданные HTTP '+ir.status+' '+infoText.slice(0,160)))+' | SQLite rc='+(info.sqlite_rc??'—'));
+  const z=Math.max(0,Math.min(Number(info.maxZoom)||9,name==='world'?9:11));
   const lat=currentFix?currentLat:54.9227,lon=currentFix?currentLng:43.3448,t=latLonToTile(lat,lon,z);
   const tr=await fetch('/tiles?map='+encodeURIComponent(name)+'&z='+z+'&x='+t.x+'&y='+t.y+'&ts='+Date.now(),{cache:'no-store'});
   if(!tr.ok)throw new Error('База обнаружена, но тайл не прочитан: HTTP '+tr.status+' (возможно, точка вне покрытия)');
@@ -1935,7 +1942,7 @@ void loop() {
     lat = 0.0; lng = 0.0; altitude = 0.0;
     satellites = 0; satellitesVisible = 0; hdop = 0.0;
   }
-  if (lastGgaMs && millis() - lastGgaMs > 3000) satellites = 0;
+  if (lastGgaMs && millis() - lastGgaMs > 3000 && !nmeaSimulatorEnabled) { satellites = 0; haveFix = false; lat = 0.0; lng = 0.0; altitude = 0.0; }
   if (lastGsvMs && millis() - lastGsvMs > 5000) { satellitesVisible = 0; gsvSnrCount = 0; avgGsvSnr = 0.0f; }
 
   if (nmeaSimulatorEnabled && millis() - lastSimulatorSentenceMs >= 1000) {
@@ -1965,7 +1972,8 @@ void loop() {
       else { uartLineOverflow = true; uartInvalidSentences++; uartCurrentLine = ""; }
     }
     if (gps.encode(c)) {
-      if (gps.location.isValid() && gps.location.isUpdated()) {
+      if (gps.location.isValid() && gps.location.isUpdated() &&
+          satellites > 0 && lastGgaMs && millis() - lastGgaMs <= 3000) {
         lat = gps.location.lat();
         lng = gps.location.lng();
         haveFix = true;
