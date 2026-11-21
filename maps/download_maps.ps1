@@ -17,11 +17,11 @@ $Maps = @(
     }
 )
 
-function Test-SqliteFile([string]$Path) {
+function Test-SqliteFile([string]$Path, [long]$MinBytes = 1000000) {
     if (!(Test-Path -LiteralPath $Path)) { return $false }
     $stream = [System.IO.File]::OpenRead($Path)
     try {
-        if ($stream.Length -lt 1000000) { return $false }
+        if ($stream.Length -lt $MinBytes) { return $false }
         $header = New-Object byte[] 16
         $read = $stream.Read($header, 0, 16)
         $magic = [System.Text.Encoding]::ASCII.GetString($header, 0, $read)
@@ -39,7 +39,7 @@ Write-Host ''
 
 foreach ($map in $Maps) {
     $target = Join-Path $MapDir $map.Name
-    if (Test-SqliteFile $target) {
+    if (Test-SqliteFile $target $map.MinBytes) {
         Write-Host "[OK] $($map.Name) already exists; keeping it." -ForegroundColor Green
         continue
     }
