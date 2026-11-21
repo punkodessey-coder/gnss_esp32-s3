@@ -95,7 +95,7 @@ elif replacement not in source:
 
 if 'fopen64(' in source or 'fseeko64(' in source or 'fstat64(' in source:
     raise RuntimeError("Unsupported Newlib *64 calls remain in patched VFS")
-if 'p->sdFile.seek((uint32_t)iOfst, SeekSet)' not in source:
+if 'p->sdFile->seek((uint32_t)iOfst, SeekSet)' not in source:
     raise RuntimeError("SD_MMC large-file read patch was not applied")
 
 with open(target, "w", encoding="utf-8") as f:
