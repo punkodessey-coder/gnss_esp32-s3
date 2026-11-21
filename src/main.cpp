@@ -1596,19 +1596,19 @@ void handleMapInfo() {
   doc["file_size_bytes"] = fileSize;
   const bool dbOk = openMbtiles(name); doc["db_open"] = dbOk;
   doc["sqlite_rc"] = mbtilesLastRc; doc["sqlite_error"] = mbtilesLastError;
-  int minZoom = -1, maxZoom = -1; long long tileCount = -1;
+  int minZoom = -1, maxZoom = -1;
   if (dbOk) {
     sqlite3_stmt* stmt = nullptr;
-    const int rc = sqlite3_prepare_v2(mbtilesDb, "SELECT COUNT(*), MIN(zoom_level), MAX(zoom_level) FROM tiles", -1, &stmt, nullptr);
+    const int rc = sqlite3_prepare_v2(mbtilesDb, "SELECT MIN(zoom_level), MAX(zoom_level) FROM tiles", -1, &stmt, nullptr);
     if (rc == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW) {
-      tileCount = sqlite3_column_int64(stmt, 0); minZoom = sqlite3_column_int(stmt, 1); maxZoom = sqlite3_column_int(stmt, 2);
+      minZoom = sqlite3_column_int(stmt, 0); maxZoom = sqlite3_column_int(stmt, 1);
     } else {
       mbtilesLastRc = rc; mbtilesLastError = "Ошибка чтения таблицы tiles: " + String(sqlite3_errmsg(mbtilesDb));
       doc["db_open"] = false; doc["sqlite_rc"] = mbtilesLastRc; doc["sqlite_error"] = mbtilesLastError;
     }
     if (stmt) sqlite3_finalize(stmt);
   }
-  doc["tile_count"] = tileCount; doc["min_zoom"] = minZoom; doc["maxZoom"] = maxZoom >= 0 ? maxZoom : 16;
+  doc["min_zoom"] = minZoom; doc["maxZoom"] = maxZoom >= 0 ? maxZoom : 16;
   String out; serializeJson(doc, out);
   server.send(dbOk && maxZoom >= 0 ? 200 : 500, "application/json; charset=utf-8", out);
 }
