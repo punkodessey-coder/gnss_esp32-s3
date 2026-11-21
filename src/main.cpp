@@ -712,7 +712,7 @@ async function loadYandexApi(){
   await window.__yandexMapsPromise;
   await new Promise(resolve=>window.ymaps.ready(resolve));
 }
-async async function loadMaps(){
+async function loadMaps(){
   const select=document.getElementById('mapSelect');let mapNames=[];
   try{
     const d=await (await fetch('/maps')).json();mapNames=Array.isArray(d.maps)?d.maps:[];
@@ -752,7 +752,7 @@ function attachTileProgress(layer,token,label){
   layer.on('tileerror',async (event)=>{if(token!==mapLoadToken)return;mapTilesFailed++;let detail='ошибка тайла';try{const response=await fetch(event.tile.src,{cache:'no-store'});const body=await response.text();detail='HTTP '+response.status+' '+body.slice(0,220);}catch(e){detail=e.message||String(e);}if(token===mapLoadToken)setMapStatus(label+': '+detail,'error');});
   layer.on('load',()=>{if(token!==mapLoadToken)return;setMapStatus(mapTilesFailed?'Загрузка завершена с ошибками: '+mapTilesFailed+' тайлов не получено':'Карта загружена: '+mapTilesLoaded+' тайлов видимой области',mapTilesFailed?'error':'good');});
 }
-async async function selectMap(value){
+async function selectMap(value){
   const token=++mapLoadToken;currentMap=value;setMapStatus('Подготовка карты…','loading');
   if(tileLayer && map){map.removeLayer(tileLayer);tileLayer=null;}
   if(yandexMap){yandexMap.destroy();yandexMap=null;yandexCircle=null;}
@@ -842,7 +842,7 @@ async function deletePoint(id){
  await fetch('/points/delete?id='+encodeURIComponent(id),{method:'POST'}); refreshSavedPoints();
 }
 
-async async function refreshGps(){
+async function refreshGps(){
 try{
   const d=await (await fetch('/coords?ts='+Date.now())).json();
   const lat=d.valid?Number(d.lat):0;
@@ -1170,7 +1170,7 @@ async function refreshUbxStatus(){
     }else if(d.event)document.getElementById('ubxStatus').textContent=d.event;
   }catch(e){}
 }
-async async function refreshUart(){
+async function refreshUart(){
  const status=document.getElementById('uartStatus');
  try{
   // Query token avoids stale responses and avoids Safari RequestInit/cache quirks.
