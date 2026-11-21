@@ -924,7 +924,7 @@ async function testMbtiles(){
   const lat=currentFix?currentLat:54.9227,lon=currentFix?currentLng:43.3448,t=latLonToTile(lat,lon,z);
   const tr=await fetch('/tiles?map='+encodeURIComponent(name)+'&z='+z+'&x='+t.x+'&y='+t.y+'&ts='+Date.now(),{cache:'no-store'});
   if(!tr.ok)throw new Error('База обнаружена, но тайл не прочитан: HTTP '+tr.status+' (возможно, точка вне покрытия)');
-  const blob=await tr.blob();if(!blob.size)throw new Error('Получен пустой тайл');if(!blob.type.startsWith('image/'))throw new Error('Неизвестный формат тайла: '+blob.type);
+  if(tr.headers.get('X-Tile-Missing'))throw new Error('Тайл отсутствует в базе для z/x/y — точка вне покрытия');const blob=await tr.blob();if(!blob.size)throw new Error('Получен пустой тайл');if(!blob.type.startsWith('image/'))throw new Error('Неизвестный формат тайла: '+blob.type);
   out.textContent='PASS — MBTiles открыта, тайл прочитан\nКарта: '+name+'\nZoom: '+z+' | X: '+t.x+' | Y: '+t.y+'\nФормат: '+blob.type+'\nРазмер: '+blob.size+' байт\nКоординаты: '+lat.toFixed(6)+', '+lon.toFixed(6);
  }catch(e){out.textContent='FAIL — '+e.message+'\nПроверьте /maps/'+name+'.mbtiles и покрытие карты.';}
 }
@@ -1579,6 +1579,15 @@ const char* tileMimeType(const uint8_t* data, int size) {
   return "application/octet-stream";
 }
 
+// 1x1 transparent PNG returned for tiles that are simply absent from the archive (outside the
+// coverage). A 404 made Leaflet report every such tile as a load error.
+static const uint8_t BLANK_PNG[] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x64, 0x60, 0xF8, 0x5F, 0x0F, 0x00, 0x02, 0x87, 0x01, 0x80, 0xEB, 0x47, 0xBA, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};
+static void sendBlankTile() {
+  server.sendHeader("X-Tile-Missing", "1");
+  server.sendHeader("Cache-Control", "public, max-age=3600");
+  server.send_P(200, "image/png", reinterpret_cast<const char*>(BLANK_PNG), sizeof(BLANK_PNG));
+}
+
 void handleMbtilesTile(const String& mapName, int z, int x, int y) {
   if (!openMbtiles(mapName)) {
     JsonDocument errorDoc; errorDoc["error"] = mbtilesLastError; errorDoc["sqlite_rc"] = mbtilesLastRc;
@@ -1599,6 +1608,7 @@ void handleMbtilesTile(const String& mapName, int z, int x, int y) {
       : "sqlite3_step вернул код " + String(rc) + ": " + String(sqlite3_errmsg(mbtilesDb));
     if (rc != SQLITE_DONE) { mbtilesLastRc = rc; mbtilesLastError = detail; }
     sqlite3_reset(mbtilesTileStmt);
+    if (rc == SQLITE_DONE) { sendBlankTile(); return; }
     JsonDocument errorDoc; errorDoc["error"] = detail; errorDoc["sqlite_rc"] = rc;
     errorDoc["map"] = mapName; errorDoc["z"] = z; errorDoc["x"] = x; errorDoc["y_xyz"] = y; errorDoc["y_tms"] = tmsY;
     String errorBody; serializeJson(errorDoc, errorBody);
@@ -1608,7 +1618,7 @@ void handleMbtilesTile(const String& mapName, int z, int x, int y) {
   const int blobSize = sqlite3_column_bytes(mbtilesTileStmt, 0);
   if (!blob || blobSize <= 0) {
     sqlite3_reset(mbtilesTileStmt);
-    server.send(404, "text/plain", "Empty tile");
+    sendBlankTile();
     return;
   }
   const char* mime = tileMimeType(blob, blobSize);
