@@ -408,6 +408,8 @@ String aiJson() {
   String out; serializeJson(doc, out); return out;
 }
 
+bool validMapName(const String& name);
+
 String mapsJson() {
   JsonDocument doc;
   JsonArray maps = doc["maps"].to<JsonArray>();
@@ -1394,7 +1396,7 @@ bool openMbtiles(const String& mapName) {
     return false;
   }
   sqlite3_exec(mbtilesDb, "PRAGMA query_only=ON;", nullptr, nullptr, nullptr);
-  sqlite3_exec(mbtilesDb, "PRAGMA cache_size=32;", nullptr, nullptr, nullptr);
+  sqlite3_exec(mbtilesDb, "PRAGMA cache_size=8;", nullptr, nullptr, nullptr);
   rc = sqlite3_prepare_v2(mbtilesDb,
     "SELECT tile_data FROM tiles WHERE zoom_level=?1 AND tile_column=?2 AND tile_row=?3 LIMIT 1",
     -1, &mbtilesTileStmt, nullptr);
