@@ -9,12 +9,12 @@ Run `download_maps.ps1` to fetch the two raster MBTiles databases:
 | File on microSD | Source package | Zoom | Approx. size |
 |---|---|---:|---:|
 | `world.mbtiles` | OpenAndroMaps World | 1–9 | 1.5 GB |
-| `european_russia.mbtiles` | OpenAndroMaps Europe-MENA regional map | 1–11 (regional detail 8–11) | 3.4 GB |
+| `european_russia.mbtiles` | OpenAndroMaps Europe-MENA regional map | 1–11 (regional detail 8–11) | 3.57 GB |
 
-The regional Europe-MENA map is the ready-made raster package selected for European Russia. Check the published coverage overview before relying on its easternmost edge for a particular route; it is a regional Europe/MENA product, not a custom boundary cut exactly along the Ural range.
+The regional Europe-MENA map is the ready-made raster package selected as the best available one-file regional coverage for European Russia. Its source package is 3,568,889,856 bytes (below the FAT32 4 GiB per-file limit). Coverage is a provider-defined Europe-MENA region, not a custom polygon ending exactly at the Urals; check the coverage overview for the far eastern edge before relying on it for a specific route.
 
 Official map catalogue and coverage: https://www.openandromaps.org/en/downloads/general-maps
-Direct file index: https://ftp2.gwdg.de/pub/misc/openstreetmap/openandromaps/world/
+Direct file index: https://osm.mathematik.tu-darmstadt.de/openstreetmap/openandromaps/world/
 
 The maps are JPG raster tiles inside SQLite MBTiles. They are compatible with the firmware's current raster tile handler. These are **not satellite/hybrid imagery**; they are OSM-style road/topographic overview maps.
 
