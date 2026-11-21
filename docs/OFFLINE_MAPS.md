@@ -16,33 +16,25 @@ Raster PNG and JPEG tiles are supported. Vector MBTiles (`format=pbf`) are **not
 
 ## microSD layout
 
-Format the card as FAT32 and create:
+The optional Windows flasher copies the selected databases into:
 
 ```text
 /maps/world.mbtiles
-/maps/central_russia.mbtiles
-/maps/local_detail.mbtiles
+/maps/european_russia.mbtiles
 ```
 
-Each file is a separate selectable map in the existing map selector. Keep individual files below the FAT32 4 GiB file-size limit. The SD card is mounted read-only for map access; the firmware opens each archive with SQLite read-only mode and keeps one database/statement open for repeated tile requests.
+Each file appears as a separate selectable map in the existing map selector. The card must be visible to Windows through a PC card reader during copying. The flasher does not format the card or remove other files.
 
-## Recommended 32 GB map set
+Use FAT32. Both selected files are individually below the 4 GiB FAT32 file-size limit. The SD card is mounted read-only for map access; the firmware opens each archive with SQLite read-only mode and keeps one database/statement open for repeated tile requests.
 
-A practical balance is:
-- `world.mbtiles`: OpenAndroMaps world raster overview, zoom 1–9 (about 1.5 GB).
-- `central_russia.mbtiles`: custom raster OSM map covering European Russia from the western border through Volga and to the Ural Mountains, target zoom 7–13.
-- `local_detail.mbtiles`: optional zoom 14–16 for a smaller frequently used area (for example, one region/city/field site).
-- A satellite/hybrid layer should be limited to a smaller selected area and sourced only from a provider/license that explicitly permits offline export. A satellite map of the entire central part of Russia at zoom 10–16 is not a realistic 32 GB target.
+## Selected map package for European Russia
 
-For a true hybrid, combine satellite imagery with a transparent labels/roads overlay on the desktop during tile generation, producing one raster MBTiles file. This avoids requiring a second Leaflet layer and extra rendering on the ESP32. If keeping separate layers, firmware/UI work is needed to expose an overlay layer.
+- `world.mbtiles`: OpenAndroMaps World, raster JPG, zoom 1–9, about 1.5 GB.
+- `european_russia.mbtiles`: OpenAndroMaps Europe-MENA regional raster MBTiles, zoom 1–11 (regional detail zoom 8–11), about 3.57 GB.
 
-## Concrete map recommendations for central Russia
+The regional file is the best ready-made single-file raster package selected for European Russia and remains below FAT32's 4 GiB per-file limit. Its coverage is the provider-defined Europe-MENA region, not a custom boundary ending exactly at the Ural Mountains; check the provider's coverage overview for the far eastern edge. These are OSM-style road/topographic maps, not satellite imagery or a satellite hybrid.
 
-- Global overview: `OAM-World-1-9-J80.mbtiles`, raster JPG, zoom 1–9, about 1.5 GB. Official download index: https://www.openandromaps.org/en/downloads/general-maps (manual download link is listed on the page).
-- OAM also publishes a Europe-large raster MBTiles at zoom 9–12 (`OAM-W1-8-EPlarge9-12-J80.mbtiles`, about 7.9 GB). Its coverage reaches toward the western Urals, but the archive is larger than the FAT32 4 GiB per-file limit and its coverage boundary should be checked before treating it as the complete east-to-Urals regional map.
-- For a complete regional coverage up to the Ural range, Geofabrik provides current OSM PBF extracts for Central, Northwestern, Volga and Ural federal districts. These are source vector datasets, **not ready-to-display raster MBTiles**. They must be rendered on a PC (for example with QGIS' XYZ/MBTiles tile export) into raster MBTiles, zoom 7–13. Sources: https://download.geofabrik.de/russia.html and https://download.geofabrik.de/russia/ural-fed-district.html.
-- Keep each resulting MBTiles file below 4 GiB if the SD card is FAT32. If a single regional export would exceed that, split it into adjacent western/eastern or northern/southern MBTiles files. The existing map selector can expose each file independently.
-- Zoom 14–16 should be generated only for a much smaller local area. Rendering the full Central Russia footprint at zoom 16 would waste storage and take a very long time.
+The repository contains a PC-side staging folder `maps/` with `download_maps.ps1`. Run it manually to download the two databases, or choose option 2 in `flash_windows.bat` to download missing files and copy them to microSD during the flashing workflow. Option 1 flashes firmware only.
 
 ## Data source and licensing
 
