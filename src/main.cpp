@@ -35,6 +35,13 @@ const char* AP_PASS = "12345678";
 
 #define SD_MOUNT "/sdcard"
 
+// SQLite + WebServer + ArduinoJson inside the handler overflow the default 8 KB loopTask
+// stack when an MBTiles archive is opened ("Stack canary watchpoint" -> ESP32 reboots and
+// the Wi-Fi AP/web UI disappears). 16 KB is enough.
+#ifdef SET_LOOP_TASK_STACK_SIZE
+SET_LOOP_TASK_STACK_SIZE(16 * 1024);
+#endif
+
 #define BLE_SERVICE_UUID "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 #define BLE_NOTIFY_UUID "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 #define BLE_COMMAND_UUID "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
@@ -79,6 +86,8 @@ int mbtilesLastRc = SQLITE_OK;
 static sqlite3* mbtilesDb = nullptr;
 static sqlite3_stmt* mbtilesTileStmt = nullptr;
 static String mbtilesOpenName;
+static int mbtilesMinZoom = -1, mbtilesMaxZoom = -1;
+static uint64_t mbtilesFileSize = 0;
 bool aiLoggingEnabled = false;
 unsigned long lastFixMs = 0;
 unsigned long lastGgaMs = 0;
@@ -443,8 +452,9 @@ String mapsJson() {
   JsonDocument doc;
   JsonArray maps = doc["maps"].to<JsonArray>();
 
-  File root = SD_MMC.open("/maps");
-  if (root) {
+  File root;
+  if (sdReady) root = SD_MMC.open("/maps");
+  if (root && root.isDirectory()) {
     File item = root.openNextFile();
 
     while (item) {
@@ -489,7 +499,6 @@ void handleRoot() {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ESP32 GNSS + IMU</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
 body{margin:0;padding:64px 12px 12px;background:#111;color:#eee;font-family:system-ui,sans-serif}
 .app-shell{display:block;min-width:0}.app-content{width:100%;min-width:0}.top-menu{position:fixed;z-index:2000;right:12px;top:10px}.menu-toggle{width:44px;height:44px;border-radius:12px;background:#2f81f7;color:white;font-size:21px;padding:0;box-shadow:0 4px 16px #0008}.tabs{display:none;position:absolute;right:0;top:50px;width:210px;max-height:calc(100vh - 70px);overflow-y:auto;flex-direction:column;gap:6px;padding:10px;background:#1c1c1c;border:1px solid #444;border-radius:12px;box-shadow:0 8px 28px #000b}.tabs.open{display:flex}.tab{width:100%;text-align:left;padding:11px 12px;border-radius:8px;background:#333;color:#eee;border:0;font-size:14px}.tab.active{background:#2f81f7;color:#fff}.fix-badge{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-weight:700;margin:8px 0}.fix-badge:before{content:'';width:10px;height:10px;border-radius:50%;background:currentColor}.fix-badge.has-fix{color:#37d67a;background:#123522}.fix-badge.no-fix{color:#ff6262;background:#3b1919}.map-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.map-status{min-height:22px;padding:9px 10px;margin-top:8px;border-radius:8px;background:#252525;color:#ddd;font-size:13px}.map-status.good{color:#58e18b}.map-status.error{color:#ff7777}.map-status.loading{color:#ffd166}
@@ -497,7 +506,9 @@ body{margin:0;padding:64px 12px 12px;background:#111;color:#eee;font-family:syst
 .metric{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #333;color:#aaa}
 .metric strong{color:#fff;font:600 18px ui-monospace,monospace}
 .gps-card .coords{margin-top:14px;color:#8ab4ff}
-.coords,.imu{font-family:monospace;font-size:15px;word-break:break-word;white-space:pre-wrap;line-height:1.5}\n#uartStats,#uartLast,#uartRecent{font-size:13px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}\n#uartRecent{height:96px;min-height:96px;max-height:96px;overflow:auto;background:#151515;border-radius:8px;padding:10px;box-sizing:border-box}#uartStats{height:106px;min-height:106px;max-height:106px;overflow:auto;box-sizing:border-box}#uartLast{height:52px;min-height:52px;max-height:52px;overflow:auto;box-sizing:border-box}.uart-monitor{height:440px;min-height:440px;max-height:440px;overflow:hidden;box-sizing:border-box;display:flex;flex-direction:column}.uart-monitor pre{flex:0 0 auto}
+.coords,.imu{font-family:monospace;font-size:15px;word-break:break-word;white-space:pre-wrap;line-height:1.5}
+#uartStats,#uartLast,#uartRecent{font-size:13px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+#uartRecent{height:96px;min-height:96px;max-height:96px;overflow:auto;background:#151515;border-radius:8px;padding:10px;box-sizing:border-box}#uartStats{height:106px;min-height:106px;max-height:106px;overflow:auto;box-sizing:border-box}#uartLast{height:52px;min-height:52px;max-height:52px;overflow:auto;box-sizing:border-box}.uart-monitor{height:440px;min-height:440px;max-height:440px;overflow:hidden;box-sizing:border-box;display:flex;flex-direction:column}.uart-monitor pre{flex:0 0 auto}
 button{padding:10px 14px;border:0;border-radius:8px;background:#2f81f7;color:#fff;font-size:15px;margin:4px 4px 0 0}
 button.gray{background:#555}
 #map{height:50vh;border-radius:12px}
@@ -640,7 +651,6 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 </main>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 let currentMap='';
 let tileLayer=null;
@@ -675,8 +685,23 @@ if(name==='system') document.getElementById('rebootStatus').textContent='Кон�
 if(name==='ubx' && !document.getElementById('ubxFields').children.length) selectUbxPage('gnss');
 }
 
+const BLANK_TILE='data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+let leafletPromise=null;
+function loadScriptTimeout(src,ms){return new Promise((resolve,reject)=>{const s=document.createElement('script');const t=setTimeout(()=>{s.remove();reject(new Error('timeout'));},ms);s.onload=()=>{clearTimeout(t);resolve();};s.onerror=()=>{clearTimeout(t);s.remove();reject(new Error('load error'));};s.src=src;document.head.appendChild(s);});}
+// Leaflet is loaded lazily and never blocks the page: first from microSD (/lib/), then from the CDN
+// (only works when the phone has internet). The ESP32 access point itself has no internet.
+function ensureLeaflet(){
+  if(typeof L!=='undefined')return Promise.resolve(true);
+  if(!leafletPromise){leafletPromise=(async()=>{
+    for(const base of ['/lib/','https://unpkg.com/leaflet@1.9.4/dist/']){
+      try{await loadScriptTimeout(base+'leaflet.js',base==='/lib/'?5000:8000);const l=document.createElement('link');l.rel='stylesheet';l.href=base+'leaflet.css';document.head.appendChild(l);return typeof L!=='undefined';}catch(e){}
+    }
+    return false;
+  })().then(ok=>{if(!ok)leafletPromise=null;return ok;});}
+  return leafletPromise;
+}
 function initMap(){
-  if(typeof L==='undefined'){document.getElementById('mapStatus').textContent='Leaflet не загрузилась — проверьте доступ к интернету';return false;}
+  if(typeof L==='undefined'){document.getElementById('mapStatus').textContent='Leaflet не найдена: скопируйте leaflet.js/leaflet.css в /lib на microSD (maps/download_maps.ps1 делает это) или подключите телефон к интернету';return false;}
   if(!map){map=L.map('map').setView(currentFix?[currentLat,currentLng]:[54.9227,43.3448],currentFix?16:15);map.on('dragstart',disableGpsFollow);map.getContainer().addEventListener('wheel',disableGpsFollow,{passive:true});}
   return true;
 }
@@ -724,7 +749,7 @@ async function loadMaps(){
   }catch(e){setMapStatus('microSD недоступна: '+e.message,'error');}
   const testSelect=document.getElementById('mbtilesTestMap');
   mapNames.forEach(name=>{const o=document.createElement('option');o.value=name;o.textContent=name;testSelect.appendChild(o);});
-  await loadYandexKey();initMap();
+  await loadYandexKey();ensureLeaflet().then(ok=>{if(ok&&!map&&!yandexMap)initMap();});
 }
 async function loadSelectedMap(){
   const value=document.getElementById('mapSelect').value;
@@ -749,7 +774,7 @@ function attachTileProgress(layer,token,label){
   mapTilesLoaded=0;mapTilesFailed=0;
   layer.on('loading',()=>{if(token===mapLoadToken)setMapStatus(label+': загружаю тайлы…','loading');});
   layer.on('tileload',()=>{if(token!==mapLoadToken)return;mapTilesLoaded++;setMapStatus(label+': загружено тайлов '+mapTilesLoaded+(mapTilesFailed?' · ошибок '+mapTilesFailed:''),'loading');});
-  layer.on('tileerror',async (event)=>{if(token!==mapLoadToken)return;mapTilesFailed++;let detail='ошибка тайла';try{const response=await fetch(event.tile.src,{cache:'no-store'});const body=await response.text();detail='HTTP '+response.status+' '+body.slice(0,220);}catch(e){detail=e.message||String(e);}if(token===mapLoadToken)setMapStatus(label+': '+detail,'error');});
+  layer.on('tileerror',async (event)=>{if(token!==mapLoadToken)return;mapTilesFailed++;if(mapTilesFailed>1){setMapStatus(label+': загружено '+mapTilesLoaded+' · без тайла (вне покрытия): '+mapTilesFailed,'loading');return;}let detail='ошибка тайла';try{const response=await fetch(event.tile.src,{cache:'no-store'});const body=await response.text();detail='HTTP '+response.status+' '+body.slice(0,220);}catch(e){detail=e.message||String(e);}if(token===mapLoadToken)setMapStatus(label+': '+detail,'error');});
   layer.on('load',()=>{if(token!==mapLoadToken)return;setMapStatus(mapTilesFailed?'Загрузка завершена с ошибками: '+mapTilesFailed+' тайлов не получено':'Карта загружена: '+mapTilesLoaded+' тайлов видимой области',mapTilesFailed?'error':'good');});
 }
 async function selectMap(value){
@@ -768,6 +793,8 @@ async function selectMap(value){
     return;
   }
   if(map){map.remove();map=null;gpsMarker=null;}
+  setMapStatus('Загружаю библиотеку карты…','loading');
+  if(!await ensureLeaflet()||token!==mapLoadToken){if(token===mapLoadToken)initMap();return;}
   if(!initMap())return;
   if(value==='online:osm')tileLayer=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'});
   else if(value==='online:esri')tileLayer=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Tiles &copy; Esri'});
@@ -778,9 +805,9 @@ async function selectMap(value){
       const infoResponse=await fetch('/maps/info?map='+encodeURIComponent(name)+'&ts='+Date.now(),{cache:'no-store'});
       const infoBody=await infoResponse.text();let info={};try{info=JSON.parse(infoBody);}catch(e){}
       if(!infoResponse.ok||!info.db_open)throw new Error((info.sqlite_error||info.error||('HTTP '+infoResponse.status+' '+infoBody.slice(0,180)))+' | SQLite rc='+(info.sqlite_rc??'—'));
-      const nativeZoom=Number.isInteger(info.maxZoom)?info.maxZoom:16;
-      tileLayer=L.tileLayer('/tiles?map='+encodeURIComponent(name)+'&z={z}&x={x}&y={y}',{minZoom:0,maxZoom:19,maxNativeZoom:nativeZoom,attribution:'Offline map'});
-      setMapStatus('MBTiles открыта · '+(Number(info.file_size_bytes||0)/1048576).toFixed(0)+' MiB · zoom '+info.min_zoom+'–'+nativeZoom,'good');
+      const nativeZoom=Number.isInteger(info.max_zoom)?info.max_zoom:(Number.isInteger(info.maxZoom)?info.maxZoom:16);const nativeMin=Number.isInteger(info.min_zoom)&&info.min_zoom>0&&info.min_zoom<=nativeZoom?info.min_zoom:0;
+      tileLayer=L.tileLayer('/tiles?map='+encodeURIComponent(name)+'&z={z}&x={x}&y={y}',{minZoom:0,maxZoom:19,minNativeZoom:nativeMin,maxNativeZoom:nativeZoom,errorTileUrl:BLANK_TILE,keepBuffer:1,updateWhenZooming:false,updateWhenIdle:true,attribution:'Offline map'});
+      setMapStatus('MBTiles открыта · '+(Number(info.file_size_bytes||0)/1048576).toFixed(0)+' MiB · zoom '+info.min_zoom+'–'+nativeZoom+(info.warning?' · ⚠ '+info.warning:''),info.warning?'error':'good');
     }catch(e){setMapStatus('Ошибка MBTiles: '+e.message,'error');return;}
   }
   if(!tileLayer){setMapStatus('Неизвестный тип карты','error');return;}
@@ -883,7 +910,7 @@ async function rebootDevice(){
 }
 async function testCoordinates(){
  const out=document.getElementById('coordinateTestResult');out.textContent='Проверяю…';
- try{const r=await fetch('/coords?ts='+Date.now());if(!r.ok)throw new Error('HTTP '+r.status);const d=await r.json();out.textContent=d.valid?'PASS — актуальный фикс\\nШирота: '+Number(d.lat).toFixed(7)+'\\nДолгота: '+Number(d.lng).toFixed(7)+'\\nСпутников в решении: '+d.sat+'\\nВидно: '+d.sat_visible+'\\nHDOP: '+d.hdop+'\\nВозраст данных: '+Math.round(d.age_ms/1000)+' с':'FAIL — фикса нет или он устарел';}
+ try{const r=await fetch('/coords?ts='+Date.now());if(!r.ok)throw new Error('HTTP '+r.status);const d=await r.json();out.textContent=d.valid?'PASS — актуальный фикс\nШирота: '+Number(d.lat).toFixed(7)+'\nДолгота: '+Number(d.lng).toFixed(7)+'\nСпутников в решении: '+d.sat+'\nВидно: '+d.sat_visible+'\nHDOP: '+d.hdop+'\nВозраст данных: '+Math.round(d.age_ms/1000)+' с':'FAIL — фикса нет или он устарел';}
  catch(e){out.textContent='ОШИБКА: '+e.message;}
 }
 async function testMbtiles(){
@@ -898,8 +925,8 @@ async function testMbtiles(){
   const tr=await fetch('/tiles?map='+encodeURIComponent(name)+'&z='+z+'&x='+t.x+'&y='+t.y+'&ts='+Date.now(),{cache:'no-store'});
   if(!tr.ok)throw new Error('База обнаружена, но тайл не прочитан: HTTP '+tr.status+' (возможно, точка вне покрытия)');
   const blob=await tr.blob();if(!blob.size)throw new Error('Получен пустой тайл');if(!blob.type.startsWith('image/'))throw new Error('Неизвестный формат тайла: '+blob.type);
-  out.textContent='PASS — MBTiles открыта, тайл прочитан\\nКарта: '+name+'\\nZoom: '+z+' | X: '+t.x+' | Y: '+t.y+'\\nФормат: '+blob.type+'\\nРазмер: '+blob.size+' байт\\nКоординаты: '+lat.toFixed(6)+', '+lon.toFixed(6);
- }catch(e){out.textContent='FAIL — '+e.message+'\\nПроверьте /maps/'+name+'.mbtiles и покрытие карты.';}
+  out.textContent='PASS — MBTiles открыта, тайл прочитан\nКарта: '+name+'\nZoom: '+z+' | X: '+t.x+' | Y: '+t.y+'\nФормат: '+blob.type+'\nРазмер: '+blob.size+' байт\nКоординаты: '+lat.toFixed(6)+', '+lon.toFixed(6);
+ }catch(e){out.textContent='FAIL — '+e.message+'\nПроверьте /maps/'+name+'.mbtiles и покрытие карты.';}
 }
 async function changeUartBaud(value){
  const r=await fetch('/uart/baud?baud='+encodeURIComponent(value),{method:'POST'});
@@ -1228,11 +1255,11 @@ async function refreshAi(){
     document.getElementById('aiSnrTrend').textContent=Number(d.snr_trend).toFixed(1);
     document.getElementById('aiSituation').textContent=d.situation||'Сбор телеметрии…';
     document.getElementById('aiDetails').textContent='Модель: '+d.model_type+
-      '\\nКод отклонения: '+d.anomaly_code+
-      '\\nМаксимальное отклонение: '+Number(d.max_z_score).toFixed(2)+' σ'+
-      '\\nРазница скоростей: '+Number(d.speed_difference_mps).toFixed(1)+' м/с'+
-      '\\nHDOP: '+Number(d.hdop).toFixed(2)+' | спутников в решении: '+d.satellites_used+
-      '\\nПримечание: '+d.note;
+      '\nКод отклонения: '+d.anomaly_code+
+      '\nМаксимальное отклонение: '+Number(d.max_z_score).toFixed(2)+' σ'+
+      '\nРазница скоростей: '+Number(d.speed_difference_mps).toFixed(1)+' м/с'+
+      '\nHDOP: '+Number(d.hdop).toFixed(2)+' | спутников в решении: '+d.satellites_used+
+      '\nПримечание: '+d.note;
   }catch(e){document.getElementById('aiStatus').textContent='Ошибка AI-статуса: '+e.message;}
 }
 async function setAiLogging(enabled){
@@ -1480,21 +1507,52 @@ void handleMaps() {
   server.send(200, "application/json", mapsJson());
 }
 
+static int mbtilesQueryInt(const char* sql, int fallback) {
+  sqlite3_stmt* stmt = nullptr;
+  int value = fallback;
+  if (sqlite3_prepare_v2(mbtilesDb, sql, -1, &stmt, nullptr) == SQLITE_OK &&
+      sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_type(stmt, 0) != SQLITE_NULL) {
+    value = sqlite3_column_int(stmt, 0);
+  }
+  if (stmt) sqlite3_finalize(stmt);
+  return value;
+}
+
+// Reads the zoom range once, when the archive is opened. Never uses MIN()/MAX() over the whole
+// `tiles` table: on a multi-GB file that can scan the card for minutes, and because WebServer is
+// single-threaded the whole web UI freezes meanwhile.
+static void mbtilesReadZoomRange() {
+  mbtilesMinZoom = mbtilesQueryInt("SELECT value FROM metadata WHERE name='minzoom' LIMIT 1", -1);
+  mbtilesMaxZoom = mbtilesQueryInt("SELECT value FROM metadata WHERE name='maxzoom' LIMIT 1", -1);
+  // Fallbacks walk the (zoom_level, tile_column, tile_row) index and stop at the first row.
+  if (mbtilesMinZoom < 0 || mbtilesMinZoom > 22)
+    mbtilesMinZoom = mbtilesQueryInt("SELECT zoom_level FROM tiles ORDER BY zoom_level ASC LIMIT 1", 0);
+  if (mbtilesMaxZoom < 0 || mbtilesMaxZoom > 22)
+    mbtilesMaxZoom = mbtilesQueryInt("SELECT zoom_level FROM tiles ORDER BY zoom_level DESC LIMIT 1", 16);
+  if (mbtilesMinZoom < 0 || mbtilesMinZoom > mbtilesMaxZoom) mbtilesMinZoom = 0;
+}
+
+static void closeMbtiles() {
+  if (mbtilesTileStmt) { sqlite3_finalize(mbtilesTileStmt); mbtilesTileStmt = nullptr; }
+  if (mbtilesDb) { sqlite3_close(mbtilesDb); mbtilesDb = nullptr; }
+  mbtilesOpenName = "";
+}
+
 bool openMbtiles(const String& mapName) {
   if (!sdReady) { mbtilesLastRc = SQLITE_CANTOPEN; mbtilesLastError = "microSD не смонтирована"; return false; }
   if (!validMapName(mapName)) { mbtilesLastRc = SQLITE_MISUSE; mbtilesLastError = "Недопустимое имя карты"; return false; }
   if (mbtilesDb && mbtilesOpenName == mapName && mbtilesTileStmt) return true;
-  if (mbtilesTileStmt) { sqlite3_finalize(mbtilesTileStmt); mbtilesTileStmt = nullptr; }
-  if (mbtilesDb) { sqlite3_close(mbtilesDb); mbtilesDb = nullptr; }
-  mbtilesOpenName = "";
+  closeMbtiles();
   const String sdPath = "/maps/" + mapName + ".mbtiles";
   if (!SD_MMC.exists(sdPath)) { mbtilesLastRc = SQLITE_CANTOPEN; mbtilesLastError = "Файл не найден на microSD: " + sdPath; return false; }
+  mbtilesFileSize = 0;
+  { File f = SD_MMC.open(sdPath, FILE_READ); if (f) { mbtilesFileSize = f.size(); f.close(); } }
   const String dbPath = String(SD_MOUNT) + sdPath;
   int rc = sqlite3_open_v2(dbPath.c_str(), &mbtilesDb, SQLITE_OPEN_READONLY, nullptr);
   if (rc != SQLITE_OK || !mbtilesDb) {
     mbtilesLastRc = rc;
     mbtilesLastError = "sqlite3_open_v2(" + dbPath + "): " + String(mbtilesDb ? sqlite3_errmsg(mbtilesDb) : "нет SQLite handle");
-    Serial.printf("MBTiles open failed (%d): %s\\n", rc, mbtilesLastError.c_str());
+    Serial.printf("MBTiles open failed (%d): %s\n", rc, mbtilesLastError.c_str());
     if (mbtilesDb) sqlite3_close(mbtilesDb);
     mbtilesDb = nullptr; return false;
   }
@@ -1503,11 +1561,12 @@ bool openMbtiles(const String& mapName) {
   rc = sqlite3_prepare_v2(mbtilesDb, "SELECT tile_data FROM tiles WHERE zoom_level=?1 AND tile_column=?2 AND tile_row=?3 LIMIT 1", -1, &mbtilesTileStmt, nullptr);
   if (rc != SQLITE_OK) {
     mbtilesLastRc = rc; mbtilesLastError = "SQL prepare таблицы tiles: " + String(sqlite3_errmsg(mbtilesDb));
-    Serial.printf("MBTiles query prepare failed (%d): %s\\n", rc, mbtilesLastError.c_str());
+    Serial.printf("MBTiles query prepare failed (%d): %s\n", rc, mbtilesLastError.c_str());
     sqlite3_close(mbtilesDb); mbtilesDb = nullptr; mbtilesTileStmt = nullptr; return false;
   }
+  mbtilesReadZoomRange();
   mbtilesLastRc = SQLITE_OK; mbtilesLastError = "SQLite открыл базу, таблица tiles доступна";
-  mbtilesOpenName = mapName; Serial.printf("MBTiles opened: %s\\n", dbPath.c_str());
+  mbtilesOpenName = mapName; Serial.printf("MBTiles opened: %s (zoom %d-%d)\n", dbPath.c_str(), mbtilesMinZoom, mbtilesMaxZoom);
   return true;
 }
 
@@ -1538,7 +1597,8 @@ void handleMbtilesTile(const String& mapName, int z, int x, int y) {
     const String detail = rc == SQLITE_DONE
       ? "Тайл отсутствует для этих z/x/y: точка может быть вне покрытия карты"
       : "sqlite3_step вернул код " + String(rc) + ": " + String(sqlite3_errmsg(mbtilesDb));
-    mbtilesLastRc = rc; mbtilesLastError = detail; sqlite3_reset(mbtilesTileStmt);
+    if (rc != SQLITE_DONE) { mbtilesLastRc = rc; mbtilesLastError = detail; }
+    sqlite3_reset(mbtilesTileStmt);
     JsonDocument errorDoc; errorDoc["error"] = detail; errorDoc["sqlite_rc"] = rc;
     errorDoc["map"] = mapName; errorDoc["z"] = z; errorDoc["x"] = x; errorDoc["y_xyz"] = y; errorDoc["y_tms"] = tmsY;
     String errorBody; serializeJson(errorDoc, errorBody);
@@ -1555,33 +1615,18 @@ void handleMbtilesTile(const String& mapName, int z, int x, int y) {
   server.sendHeader("Cache-Control", "public, max-age=86400");
   server.setContentLength(blobSize);
   server.send(200, mime, "");
-  server.client().write(blob, blobSize);
+  // Write in bounded chunks and give up if the client stalls/disconnects, so one dead
+  // connection cannot block the single-threaded server forever.
+  auto& client = server.client();
+  const uint8_t* p = blob;
+  int remaining = blobSize, stalls = 0;
+  while (remaining > 0 && client.connected()) {
+    const int chunk = remaining > 4096 ? 4096 : remaining;
+    const size_t written = client.write(p, chunk);
+    if (written == 0) { if (++stalls > 200) break; delay(5); continue; }
+    stalls = 0; p += written; remaining -= (int)written;
+  }
   sqlite3_reset(mbtilesTileStmt);
-}
-
-int readMbtilesMaxZoom(const String& mapName) {
-  String path = String(SD_MOUNT) + "/maps/" + mapName + ".mbtiles";
-  sqlite3* db = nullptr;
-  if (sqlite3_open_v2(path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK || !db) {
-    if (db) sqlite3_close(db);
-    return 16;
-  }
-  sqlite3_stmt* stmt = nullptr;
-  int maxZoom = -1;
-  if (sqlite3_prepare_v2(db, "SELECT value FROM metadata WHERE name='maxzoom' LIMIT 1", -1, &stmt, nullptr) == SQLITE_OK &&
-      sqlite3_step(stmt) == SQLITE_ROW) {
-    const unsigned char* value = sqlite3_column_text(stmt, 0);
-    if (value) maxZoom = atoi(reinterpret_cast<const char*>(value));
-  }
-  if (stmt) sqlite3_finalize(stmt);
-  if (maxZoom < 0 || maxZoom > 22) {
-    stmt = nullptr;
-    if (sqlite3_prepare_v2(db, "SELECT MAX(zoom_level) FROM tiles", -1, &stmt, nullptr) == SQLITE_OK &&
-        sqlite3_step(stmt) == SQLITE_ROW) maxZoom = sqlite3_column_int(stmt, 0);
-    if (stmt) sqlite3_finalize(stmt);
-  }
-  sqlite3_close(db);
-  return (maxZoom >= 0 && maxZoom <= 22) ? maxZoom : 16;
 }
 
 void handleMapInfo() {
@@ -1594,23 +1639,44 @@ void handleMapInfo() {
   uint64_t fileSize = 0;
   if (exists) { File f = SD_MMC.open(sdPath, FILE_READ); if (f) { fileSize = f.size(); f.close(); } }
   doc["file_size_bytes"] = fileSize;
+  // ESP-IDF uses a 32-bit off_t, so reads beyond 2 GiB inside one file can fail on some builds.
+  if (fileSize >= 2147483648ULL)
+    doc["warning"] = "Файл больше 2 ГиБ: на ESP32 чтение дальше 2 ГиБ может завершаться ошибкой SQLite (IOERR). Разбейте карту на файлы < 2 ГиБ.";
   const bool dbOk = openMbtiles(name); doc["db_open"] = dbOk;
   doc["sqlite_rc"] = mbtilesLastRc; doc["sqlite_error"] = mbtilesLastError;
-  int minZoom = -1, maxZoom = -1;
-  if (dbOk) {
-    sqlite3_stmt* stmt = nullptr;
-    const int rc = sqlite3_prepare_v2(mbtilesDb, "SELECT MIN(zoom_level), MAX(zoom_level) FROM tiles", -1, &stmt, nullptr);
-    if (rc == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW) {
-      minZoom = sqlite3_column_int(stmt, 0); maxZoom = sqlite3_column_int(stmt, 1);
-    } else {
-      mbtilesLastRc = rc; mbtilesLastError = "Ошибка чтения таблицы tiles: " + String(sqlite3_errmsg(mbtilesDb));
-      doc["db_open"] = false; doc["sqlite_rc"] = mbtilesLastRc; doc["sqlite_error"] = mbtilesLastError;
-    }
-    if (stmt) sqlite3_finalize(stmt);
-  }
-  doc["min_zoom"] = minZoom; doc["maxZoom"] = maxZoom >= 0 ? maxZoom : 16;
+  const int minZoom = dbOk ? mbtilesMinZoom : -1;
+  const int maxZoom = dbOk ? mbtilesMaxZoom : 16;
+  doc["min_zoom"] = minZoom; doc["max_zoom"] = maxZoom; doc["maxZoom"] = maxZoom;
   String out; serializeJson(doc, out);
-  server.send(dbOk && maxZoom >= 0 ? 200 : 500, "application/json; charset=utf-8", out);
+  server.send(dbOk ? 200 : 500, "application/json; charset=utf-8", out);
+}
+
+// Leaflet is served from microSD (/lib/...) because the ESP32 Wi-Fi AP has no internet, so
+// https://unpkg.com cannot be reached from the phone and the page used to hang waiting for it.
+static const char* const LEAFLET_FILES[] = {
+  "/lib/leaflet.js", "/lib/leaflet.css",
+  "/lib/images/layers.png", "/lib/images/layers-2x.png",
+  "/lib/images/marker-icon.png", "/lib/images/marker-icon-2x.png", "/lib/images/marker-shadow.png"
+};
+
+void handleLib() {
+  const String uri = server.uri();
+  bool allowed = false;
+  for (const char* item : LEAFLET_FILES) if (uri == item) { allowed = true; break; }
+  if (!allowed) { server.send(404, "text/plain", "Not found"); return; }
+  if (!sdReady || !SD_MMC.exists(uri)) { server.send(404, "text/plain", "Leaflet file not found on microSD: " + uri); return; }
+  File file = SD_MMC.open(uri, FILE_READ);
+  if (!file) { server.send(500, "text/plain", "Cannot open " + uri); return; }
+  const char* type = uri.endsWith(".js") ? "application/javascript" : uri.endsWith(".css") ? "text/css" : "image/png";
+  server.sendHeader("Cache-Control", "public, max-age=604800");
+  server.streamFile(file, type);
+  file.close();
+}
+
+static bool isDigitsOnly(const String& value) {
+  if (value.length() == 0 || value.length() > 8) return false;
+  for (unsigned int i = 0; i < value.length(); i++) if (!isdigit((unsigned char)value[i])) return false;
+  return true;
 }
 
 void handleTile() {
@@ -1619,31 +1685,38 @@ void handleTile() {
     return;
   }
 
-  String mapName = server.arg("map");
-  String z = server.arg("z");
-  String x = server.arg("x");
-  String y = server.arg("y");
-
+  const String mapName = server.arg("map");
   if (!validMapName(mapName)) {
     server.send(400, "text/plain", "Invalid map");
     return;
   }
 
+  // z/x/y end up in a file path for legacy PNG folders, so accept plain integers only
+  // (previously "../" sequences were passed straight into the path).
+  const String zs = server.arg("z"), xs = server.arg("x"), ys = server.arg("y");
+  if (!isDigitsOnly(zs) || !isDigitsOnly(xs) || !isDigitsOnly(ys)) {
+    server.send(400, "text/plain", "Invalid tile coordinates");
+    return;
+  }
+  const long zi = zs.toInt(), xi = xs.toInt(), yi = ys.toInt();
+  if (zi > 22 || xi >= (1L << zi) || yi >= (1L << zi)) {
+    server.send(400, "text/plain", "Invalid tile coordinates");
+    return;
+  }
+  if (!sdReady) {
+    server.send(503, "text/plain", "microSD not mounted");
+    return;
+  }
+
   // Prefer a single-file MBTiles archive; keep legacy XYZ PNG directories compatible.
-  String mbtilesPath = "/maps/" + mapName + ".mbtiles";
-  if (SD_MMC.exists(mbtilesPath)) {
-    long zi = z.toInt(), xi = x.toInt(), yi = y.toInt();
-    if (z.length() == 0 || x.length() == 0 || y.length() == 0 ||
-        zi < 0 || zi > 22 || xi < 0 || yi < 0 ||
-        xi >= (1L << zi) || yi >= (1L << zi)) {
-      server.send(400, "text/plain", "Invalid tile coordinates");
-      return;
-    }
+  // When the archive is already open skip the FAT lookup: it costs a card access per tile.
+  const bool alreadyOpen = mbtilesDb && mbtilesOpenName == mapName;
+  if (alreadyOpen || SD_MMC.exists("/maps/" + mapName + ".mbtiles")) {
     handleMbtilesTile(mapName, (int)zi, (int)xi, (int)yi);
     return;
   }
 
-  String path = "/maps/" + mapName + "/" + z + "/" + x + "/" + y + ".png";
+  const String path = "/maps/" + mapName + "/" + String(zi) + "/" + String(xi) + "/" + String(yi) + ".png";
 
   if (!SD_MMC.exists(path)) {
     server.send(404, "text/plain", "Tile not found");
@@ -1824,6 +1897,7 @@ void setup() {
   server.on("/maps/yandex-key", HTTP_POST, handleYandexKeySet);
   server.on("/settings/fix-timeout", HTTP_POST, handleSetFixTimeout);
   server.on("/tiles", HTTP_GET, handleTile);
+  for (const char* leafletFile : LEAFLET_FILES) server.on(leafletFile, HTTP_GET, handleLib);
   server.on("/display/test", HTTP_POST, handleDisplayTest);
   server.on("/simulator/start", HTTP_POST, handleSimulatorStart);
   server.on("/simulator/stop", HTTP_POST, handleSimulatorStop);

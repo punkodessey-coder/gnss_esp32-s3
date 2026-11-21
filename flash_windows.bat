@@ -139,6 +139,18 @@ if "%COPY_MAPS%"=="1" (
     exit /b 1
   )
   echo [OK] Offline maps copied to !SDLETTER!:\maps
+  if not exist "%~dp0maps\lib\leaflet.js" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0maps\download_leaflet.ps1"
+  if exist "%~dp0maps\lib\leaflet.js" (
+    robocopy "%~dp0maps\lib" "!SDLETTER!:\lib" /E /R:2 /W:3
+    set "ROBOCODE=!ERRORLEVEL!"
+    if !ROBOCODE! GEQ 8 (
+      echo [WARN] Leaflet copy failed. Robocopy code: !ROBOCODE!. The map needs Leaflet in !SDLETTER!:\lib
+    ) else (
+      echo [OK] Leaflet copied to !SDLETTER!:\lib
+    )
+  ) else (
+    echo [WARN] Leaflet was not downloaded: the offline map page needs it in !SDLETTER!:\lib
+  )
 )
 
 echo.

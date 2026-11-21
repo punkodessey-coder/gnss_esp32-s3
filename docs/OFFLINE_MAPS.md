@@ -27,6 +27,21 @@ Each file appears as a separate selectable map in the existing map selector. The
 
 Use FAT32. Both selected files are individually below the 4 GiB FAT32 file-size limit. The SD card is mounted read-only for map access; the firmware opens each archive with SQLite read-only mode and keeps one database/statement open for repeated tile requests.
 
+## Leaflet on microSD (required for offline use)
+
+The ESP32 Wi-Fi access point has no internet, so the page cannot fetch Leaflet from a CDN. The firmware serves it from the card:
+
+```text
+/lib/leaflet.js  /lib/leaflet.css  /lib/images/{layers,layers-2x,marker-icon,marker-icon-2x,marker-shadow}.png
+```
+
+Run `maps/download_leaflet.ps1` (the flasher does it automatically) and copy `maps/lib` to `X:\lib`. If a file is missing the page falls back to the CDN, which only works when the phone itself has internet.
+
+## Known limits
+
+- `ESP-IDF` uses a 32-bit `off_t`, so reading past 2 GiB inside a single file may fail (SQLite IOERR). The firmware reports a warning for `.mbtiles` files >= 2 GiB; split large regions into several files < 2 GiB. This is not verified on hardware.
+- The web server is single-threaded: map tiles are fetched one at a time, so panning is slower than on a PC.
+
 ## Selected map package for European Russia
 
 - `world.mbtiles`: OpenAndroMaps World, raster JPG, zoom 1–9, about 1.5 GB.
