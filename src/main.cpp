@@ -1606,7 +1606,7 @@ void handleMapInfo() {
   server.send(dbOk && maxZoom >= 0 ? 200 : 500, "application/json; charset=utf-8", out);
 }
 
-void handleTile()void handleTile() {
+void handleTile() {
   if (!server.hasArg("map") || !server.hasArg("z") || !server.hasArg("x") || !server.hasArg("y")) {
     server.send(400, "text/plain", "Missing parameters");
     return;
