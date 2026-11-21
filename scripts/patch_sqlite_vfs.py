@@ -61,12 +61,21 @@ if "p->sdFile->seek((uint32_t)iOfst, SeekSet)" not in source:
         raise RuntimeError("Could not locate stock ESP32Read fseek/fread pair (pattern mismatch)")
 
 # Use the SD_MMC File size for the main database.
+# Locate the function and inject after its ESP32File pointer declaration; this
+# avoids depending on whitespace or exact signature formatting.
 if "p->sdFile->size()" not in source:
-    size_pattern = r"(static int ESP32FileSize\(sqlite3_file \*pFile,\s*sqlite3_int64 \*pSize\)\s*\{.*?ESP32File \*p = \(ESP32File\*\)pFile;)"
-    size_code = r"\1\n  if (p->sdFile) {\n    *pSize = (sqlite3_int64)p->sdFile->size();\n    return SQLITE_OK;\n  }"
-    source, n = re.subn(size_pattern, size_code, source, count=1, flags=re.S)
-    if n != 1:
-        raise RuntimeError("Could not insert SD_MMC file-size handling")
+    fn = source.find("static int ESP32FileSize(")
+    if fn < 0:
+        raise RuntimeError("ESP32FileSize function not found in Sqlite3Esp32 VFS")
+    ptr = source.find("ESP32File *p = (ESP32File*)pFile;", fn)
+    if ptr < 0:
+        raise RuntimeError("ESP32FileSize file pointer declaration not found")
+    insert_at = ptr + len("ESP32File *p = (ESP32File*)pFile;")
+    source = source[:insert_at] + """
+  if (p->sdFile) {
+    *pSize = (sqlite3_int64)p->sdFile->size();
+    return SQLITE_OK;
+  }""" + source[insert_at:]
 
 # Attach the SD_MMC handle after the stock stdio open succeeds.
 if "p->sdFile = new File" not in source:
