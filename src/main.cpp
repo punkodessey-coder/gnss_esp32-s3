@@ -708,7 +708,7 @@ async function selectMap(value){
     tileLayer=L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',{maxZoom:17,attribution:'&copy; OpenTopoMap'});
   }else if(value.startsWith('sd:')){
     const name=value.substring(3);
-    tileLayer=L.tileLayer('/tiles?map='+encodeURIComponent(name)+'&z={z}&x={x}&y={y}',{maxZoom:19,minZoom:3,attribution:'Offline map'});
+    tileLayer=L.tileLayer('/tiles?map='+encodeURIComponent(name)+'&z={z}&x={x}&y={y}',{minZoom:0,maxZoom:19,maxNativeZoom:16,attribution:'Offline map'});
   }
   if(tileLayer)tileLayer.addTo(map);
   if(currentFix) updateLeafletPoint(currentLat,currentLng);
@@ -1379,6 +1379,77 @@ void handleMaps() {
   server.send(200, "application/json", mapsJson());
 }
 
+bool openMbtiles(const String& mapName) {
+  if (mbtilesDb && mbtilesOpenName == mapName && mbtilesTileStmt) return true;
+  if (mbtilesTileStmt) { sqlite3_finalize(mbtilesTileStmt); mbtilesTileStmt = nullptr; }
+  if (mbtilesDb) { sqlite3_close(mbtilesDb); mbtilesDb = nullptr; }
+  mbtilesOpenName = "";
+
+  String dbPath = String(SD_MOUNT) + "/maps/" + mapName + ".mbtiles";
+  int rc = sqlite3_open_v2(dbPath.c_str(), &mbtilesDb, SQLITE_OPEN_READONLY, nullptr);
+  if (rc != SQLITE_OK || !mbtilesDb) {
+    Serial.printf("MBTiles open failed (%d): %s\\n", rc, dbPath.c_str());
+    if (mbtilesDb) sqlite3_close(mbtilesDb);
+    mbtilesDb = nullptr;
+    return false;
+  }
+  sqlite3_exec(mbtilesDb, "PRAGMA query_only=ON;", nullptr, nullptr, nullptr);
+  sqlite3_exec(mbtilesDb, "PRAGMA cache_size=32;", nullptr, nullptr, nullptr);
+  rc = sqlite3_prepare_v2(mbtilesDb,
+    "SELECT tile_data FROM tiles WHERE zoom_level=?1 AND tile_column=?2 AND tile_row=?3 LIMIT 1",
+    -1, &mbtilesTileStmt, nullptr);
+  if (rc != SQLITE_OK) {
+    Serial.printf("MBTiles query prepare failed: %s\\n", sqlite3_errmsg(mbtilesDb));
+    sqlite3_close(mbtilesDb); mbtilesDb = nullptr; mbtilesTileStmt = nullptr;
+    return false;
+  }
+  mbtilesOpenName = mapName;
+  Serial.printf("MBTiles opened: %s\\n", dbPath.c_str());
+  return true;
+}
+
+const char* tileMimeType(const uint8_t* data, int size) {
+  if (!data || size < 4) return "application/octet-stream";
+  if (size >= 8 && data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G') return "image/png";
+  if (data[0] == 0xFF && data[1] == 0xD8) return "image/jpeg";
+  if (size >= 12 && data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F' &&
+      data[8] == 'W' && data[9] == 'E' && data[10] == 'B' && data[11] == 'P') return "image/webp";
+  return "application/octet-stream";
+}
+
+void handleMbtilesTile(const String& mapName, int z, int x, int y) {
+  if (!openMbtiles(mapName)) {
+    server.send(500, "text/plain; charset=utf-8", "Cannot open MBTiles database");
+    return;
+  }
+  // MBTiles uses TMS rows; Leaflet requests XYZ rows.
+  const int tmsY = ((1 << z) - 1) - y;
+  sqlite3_reset(mbtilesTileStmt);
+  sqlite3_clear_bindings(mbtilesTileStmt);
+  sqlite3_bind_int(mbtilesTileStmt, 1, z);
+  sqlite3_bind_int(mbtilesTileStmt, 2, x);
+  sqlite3_bind_int(mbtilesTileStmt, 3, tmsY);
+  const int rc = sqlite3_step(mbtilesTileStmt);
+  if (rc != SQLITE_ROW) {
+    sqlite3_reset(mbtilesTileStmt);
+    server.send(404, "text/plain", "Tile not found");
+    return;
+  }
+  const uint8_t* blob = static_cast<const uint8_t*>(sqlite3_column_blob(mbtilesTileStmt, 0));
+  const int blobSize = sqlite3_column_bytes(mbtilesTileStmt, 0);
+  if (!blob || blobSize <= 0) {
+    sqlite3_reset(mbtilesTileStmt);
+    server.send(404, "text/plain", "Empty tile");
+    return;
+  }
+  const char* mime = tileMimeType(blob, blobSize);
+  server.sendHeader("Cache-Control", "public, max-age=86400");
+  server.setContentLength(blobSize);
+  server.send(200, mime, "");
+  server.client().write(blob, blobSize);
+  sqlite3_reset(mbtilesTileStmt);
+}
+
 void handleTile() {
   if (!server.hasArg("map") || !server.hasArg("z") || !server.hasArg("x") || !server.hasArg("y")) {
     server.send(400, "text/plain", "Missing parameters");
@@ -1392,6 +1463,20 @@ void handleTile() {
 
   if (!validMapName(mapName)) {
     server.send(400, "text/plain", "Invalid map");
+    return;
+  }
+
+  // Prefer a single-file MBTiles archive; keep legacy XYZ PNG directories compatible.
+  String mbtilesPath = String(SD_MOUNT) + "/maps/" + mapName + ".mbtiles";
+  if (SD_MMC.exists(mbtilesPath)) {
+    long zi = z.toInt(), xi = x.toInt(), yi = y.toInt();
+    if (z.length() == 0 || x.length() == 0 || y.length() == 0 ||
+        zi < 0 || zi > 22 || xi < 0 || yi < 0 ||
+        xi >= (1L << zi) || yi >= (1L << zi)) {
+      server.send(400, "text/plain", "Invalid tile coordinates");
+      return;
+    }
+    handleMbtilesTile(mapName, (int)zi, (int)xi, (int)yi);
     return;
   }
 
