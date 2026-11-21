@@ -52,3 +52,7 @@ PlatformIO: основная конфигурация `esp32s3`, тест экр
 - Яндекс Гибрид загружается через официальный JavaScript API и требует API-ключ. Ключ можно сохранить в настройках карты.
 - NMEA-имитация движется по замкнутому круговому маршруту радиусом около 20 м в центре Сарова за 60 секунд на круг и выдаёт обновляемые RMC/GGA/GSA/GSV/VTG.
 
+
+## Offline maps (feature/offline-mbtiles)
+
+- Existing Leaflet `/tiles` endpoint supports raster MBTiles (SQLite, JPG/PNG) and legacy XYZ PNG folders. See [docs/OFFLINE_MAPS.md](docs/OFFLINE_MAPS.md) for microSD layout and recommended map packages.
