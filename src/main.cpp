@@ -1583,7 +1583,9 @@ bool openMbtiles(const String& mapName) {
     mbtilesDb = nullptr; return false;
   }
   sqlite3_exec(mbtilesDb, "PRAGMA query_only=ON;", nullptr, nullptr, nullptr);
-  sqlite3_exec(mbtilesDb, "PRAGMA cache_size=8;", nullptr, nullptr, nullptr);
+  sqlite3_exec(mbtilesDb, "PRAGMA mmap_size=0;", nullptr, nullptr, nullptr);
+  sqlite3_exec(mbtilesDb, "PRAGMA cache_size=2;", nullptr, nullptr, nullptr);
+  sqlite3_exec(mbtilesDb, "PRAGMA temp_store=FILE;", nullptr, nullptr, nullptr);
   rc = sqlite3_prepare_v2(mbtilesDb, "SELECT tile_data FROM tiles WHERE zoom_level=?1 AND tile_column=?2 AND tile_row=?3 LIMIT 1", -1, &mbtilesTileStmt, nullptr);
   if (rc != SQLITE_OK) {
     mbtilesLastRc = rc; mbtilesLastError = "SQL prepare таблицы tiles: " + String(sqlite3_errmsg(mbtilesDb));
@@ -1629,8 +1631,12 @@ void handleMbtilesTile(const String& mapName, int z, int x, int y) {
   sqlite3_bind_int(mbtilesTileStmt, 1, z);
   sqlite3_bind_int(mbtilesTileStmt, 2, x);
   sqlite3_bind_int(mbtilesTileStmt, 3, tmsY);
+  const uint32_t heapBefore = ESP.getFreeHeap();
+  const uint32_t largestBefore = ESP.getMaxAllocHeap();
   const int rc = sqlite3_step(mbtilesTileStmt);
   if (rc != SQLITE_ROW) {
+    logMbtilesDiagnostic("SQLITE STEP memory free=" + String(heapBefore) + " largest=" + String(largestBefore) +
+      " min_free=" + String(ESP.getMinFreeHeap()));
     const String detail = rc == SQLITE_DONE
       ? "Тайл отсутствует для этих z/x/y: точка может быть вне покрытия карты"
       : "sqlite3_step вернул код " + String(rc) + ": " + String(sqlite3_errmsg(mbtilesDb));
@@ -1644,6 +1650,9 @@ void handleMbtilesTile(const String& mapName, int z, int x, int y) {
   }
   const uint8_t* blob = static_cast<const uint8_t*>(sqlite3_column_blob(mbtilesTileStmt, 0));
   const int blobSize = sqlite3_column_bytes(mbtilesTileStmt, 0);
+  logMbtilesDiagnostic("TILE OK map=" + mapName + " z=" + String(z) + " x=" + String(x) +
+    " y=" + String(y) + " bytes=" + String(blobSize) + " heap_free=" + String(ESP.getFreeHeap()) +
+    " heap_largest=" + String(ESP.getMaxAllocHeap()));
   if (!blob || blobSize <= 0) {
     sqlite3_reset(mbtilesTileStmt);
     sendBlankTile();
@@ -1690,9 +1699,8 @@ void handleMapInfo() {
   uint64_t fileSize = 0;
   if (exists) { File f = SD_MMC.open(sdPath, FILE_READ); if (f) { fileSize = f.size(); f.close(); } }
   doc["file_size_bytes"] = fileSize;
-  // ESP-IDF uses a 32-bit off_t, so reads beyond 2 GiB inside one file can fail on some builds.
-  if (fileSize >= 2147483648ULL)
-    doc["warning"] = "Файл больше 2 ГиБ: на ESP32 чтение дальше 2 ГиБ может завершаться ошибкой SQLite (IOERR). Разбейте карту на файлы < 2 ГиБ.";
+  doc["large_file_support"] = true;
+  doc["note"] = "Для MBTiles включено 64-битное файловое позиционирование SQLite.";
   const bool dbOk = openMbtiles(name); doc["db_open"] = dbOk;
   doc["sqlite_rc"] = mbtilesLastRc; doc["sqlite_error"] = mbtilesLastError;
   const int minZoom = dbOk ? mbtilesMinZoom : -1;
