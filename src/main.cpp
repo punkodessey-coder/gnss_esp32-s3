@@ -74,6 +74,8 @@ float avgGsvSnr = 0.0f;
 uint8_t gsvSnrCount = 0;
 GnssAiMonitor aiMonitor;
 bool sdReady = false;
+String mbtilesLastError = "База ещё не открывалась";
+int mbtilesLastRc = SQLITE_OK;
 static sqlite3* mbtilesDb = nullptr;
 static sqlite3_stmt* mbtilesTileStmt = nullptr;
 static String mbtilesOpenName;
@@ -89,6 +91,9 @@ unsigned long uartLastByteMs = 0, uartWindowStartMs = 0, uartBytesWindow = 0;
 unsigned long uartBytesPerSecond = 0, uartTotalBytes = 0, uartInvalidSentences = 0;
 String uartCurrentLine, uartLastLine, uartRecentLines;
 bool uartLineOverflow = false;
+uint16_t gsvCycleSnrSum = 0;
+uint8_t gsvCycleSnrCount = 0, gsvCycleExpected = 0, gsvCycleSeen = 0;
+uint8_t gsvCycleVisible = 0;
 
 bool imuReady = false;
 float ax = 0, ay = 0, az = 0;
@@ -239,6 +244,10 @@ String coordsJson() {
   doc["fix_timeout_s"] = fixTimeoutSeconds;
   doc["hdop"] = hdop;
   doc["age_ms"] = haveFix ? (long)(millis() - lastFixMs) : -1;
+  doc["gsv_snr_avg"] = gsvSnrCount ? avgGsvSnr : 0.0f;
+  doc["gsv_snr_count"] = gsvSnrCount;
+  doc["gsv_age_ms"] = lastGsvMs ? (long)(millis() - lastGsvMs) : -1;
+  doc["gga_age_ms"] = lastGgaMs ? (long)(millis() - lastGgaMs) : -1;
 
   String out;
   serializeJson(doc, out);
@@ -312,30 +321,38 @@ bool validNmeaChecksum(const String& line) {
 
 void processNmeaLine(const String& line) {
   if (line.length() < 7 || line[0] != '$' || !validNmeaChecksum(line)) return;
-  String type = line.substring(3, 6);
+  const String type = line.substring(3, 6);
   if (type == "GGA") {
     const int fixQuality = nmeaField(line, 6).toInt();
     const int used = nmeaField(line, 7).toInt();
     satellites = (fixQuality > 0) ? constrain(used, 0, 99) : 0;
     lastGgaMs = millis();
   } else if (type == "GSV") {
-    const int visible = nmeaField(line, 3).toInt();
-    satellitesVisible = constrain(visible, 0, 99);
-    float snrSum = 0.0f;
-    uint8_t snrCount = 0;
+    const int totalMessages = constrain(nmeaField(line, 1).toInt(), 1, 9);
+    const int messageNumber = constrain(nmeaField(line, 2).toInt(), 1, 9);
+    const int visible = constrain(nmeaField(line, 3).toInt(), 0, 99);
+    if (messageNumber == 1 || gsvCycleExpected != totalMessages || messageNumber != gsvCycleSeen + 1) {
+      gsvCycleSnrSum = 0; gsvCycleSnrCount = 0;
+      gsvCycleExpected = totalMessages; gsvCycleSeen = 0;
+      gsvCycleVisible = visible;
+    }
     for (uint8_t field = 7; field < 23; field += 4) {
-      String snrText = nmeaField(line, field);
+      const String snrText = nmeaField(line, field);
       if (snrText.length()) {
         const int snr = snrText.toInt();
-        if (snr > 0 && snr <= 99) { snrSum += snr; ++snrCount; }
+        if (snr > 0 && snr <= 99) { gsvCycleSnrSum += snr; if (gsvCycleSnrCount < 99) ++gsvCycleSnrCount; }
       }
     }
-    if (snrCount) { avgGsvSnr = snrSum / snrCount; gsvSnrCount = snrCount; }
-    lastGsvMs = millis();
+    gsvCycleSeen = messageNumber; gsvCycleVisible = visible; lastGsvMs = millis();
+    if (messageNumber >= totalMessages) {
+      satellitesVisible = gsvCycleVisible;
+      gsvSnrCount = gsvCycleSnrCount;
+      avgGsvSnr = gsvSnrCount ? (float)gsvCycleSnrSum / gsvSnrCount : 0.0f;
+    }
   }
 }
 
-String savedPointsResponse() {
+String savedPointsResponse()String savedPointsResponse() {
   String value = preferences.getString("points", "[]");
   if (value.length() == 0) value = "[]";
   return value;
@@ -1439,35 +1456,37 @@ void handleMaps() {
 }
 
 bool openMbtiles(const String& mapName) {
+  if (!sdReady) { mbtilesLastRc = SQLITE_CANTOPEN; mbtilesLastError = "microSD не смонтирована"; return false; }
+  if (!validMapName(mapName)) { mbtilesLastRc = SQLITE_MISUSE; mbtilesLastError = "Недопустимое имя карты"; return false; }
   if (mbtilesDb && mbtilesOpenName == mapName && mbtilesTileStmt) return true;
   if (mbtilesTileStmt) { sqlite3_finalize(mbtilesTileStmt); mbtilesTileStmt = nullptr; }
   if (mbtilesDb) { sqlite3_close(mbtilesDb); mbtilesDb = nullptr; }
   mbtilesOpenName = "";
-
-  String dbPath = String(SD_MOUNT) + "/maps/" + mapName + ".mbtiles";
+  const String sdPath = "/maps/" + mapName + ".mbtiles";
+  if (!SD_MMC.exists(sdPath)) { mbtilesLastRc = SQLITE_CANTOPEN; mbtilesLastError = "Файл не найден на microSD: " + sdPath; return false; }
+  const String dbPath = String(SD_MOUNT) + sdPath;
   int rc = sqlite3_open_v2(dbPath.c_str(), &mbtilesDb, SQLITE_OPEN_READONLY, nullptr);
   if (rc != SQLITE_OK || !mbtilesDb) {
-    Serial.printf("MBTiles open failed (%d): %s\\n", rc, dbPath.c_str());
+    mbtilesLastRc = rc;
+    mbtilesLastError = "sqlite3_open_v2(" + dbPath + "): " + String(mbtilesDb ? sqlite3_errmsg(mbtilesDb) : "нет SQLite handle");
+    Serial.printf("MBTiles open failed (%d): %s\\n", rc, mbtilesLastError.c_str());
     if (mbtilesDb) sqlite3_close(mbtilesDb);
-    mbtilesDb = nullptr;
-    return false;
+    mbtilesDb = nullptr; return false;
   }
   sqlite3_exec(mbtilesDb, "PRAGMA query_only=ON;", nullptr, nullptr, nullptr);
   sqlite3_exec(mbtilesDb, "PRAGMA cache_size=8;", nullptr, nullptr, nullptr);
-  rc = sqlite3_prepare_v2(mbtilesDb,
-    "SELECT tile_data FROM tiles WHERE zoom_level=?1 AND tile_column=?2 AND tile_row=?3 LIMIT 1",
-    -1, &mbtilesTileStmt, nullptr);
+  rc = sqlite3_prepare_v2(mbtilesDb, "SELECT tile_data FROM tiles WHERE zoom_level=?1 AND tile_column=?2 AND tile_row=?3 LIMIT 1", -1, &mbtilesTileStmt, nullptr);
   if (rc != SQLITE_OK) {
-    Serial.printf("MBTiles query prepare failed: %s\\n", sqlite3_errmsg(mbtilesDb));
-    sqlite3_close(mbtilesDb); mbtilesDb = nullptr; mbtilesTileStmt = nullptr;
-    return false;
+    mbtilesLastRc = rc; mbtilesLastError = "SQL prepare таблицы tiles: " + String(sqlite3_errmsg(mbtilesDb));
+    Serial.printf("MBTiles query prepare failed (%d): %s\\n", rc, mbtilesLastError.c_str());
+    sqlite3_close(mbtilesDb); mbtilesDb = nullptr; mbtilesTileStmt = nullptr; return false;
   }
-  mbtilesOpenName = mapName;
-  Serial.printf("MBTiles opened: %s\\n", dbPath.c_str());
+  mbtilesLastRc = SQLITE_OK; mbtilesLastError = "SQLite открыл базу, таблица tiles доступна";
+  mbtilesOpenName = mapName; Serial.printf("MBTiles opened: %s\\n", dbPath.c_str());
   return true;
 }
 
-const char* tileMimeType(const uint8_t* data, int size) {
+const char* tileMimeTypeconst char* tileMimeType(const uint8_t* data, int size) {
   if (!data || size < 4) return "application/octet-stream";
   if (size >= 8 && data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G') return "image/png";
   if (data[0] == 0xFF && data[1] == 0xD8) return "image/jpeg";
@@ -1478,8 +1497,9 @@ const char* tileMimeType(const uint8_t* data, int size) {
 
 void handleMbtilesTile(const String& mapName, int z, int x, int y) {
   if (!openMbtiles(mapName)) {
-    server.send(500, "text/plain; charset=utf-8", "Cannot open MBTiles database");
-    return;
+    JsonDocument errorDoc; errorDoc["error"] = mbtilesLastError; errorDoc["sqlite_rc"] = mbtilesLastRc;
+    String errorBody; serializeJson(errorDoc, errorBody);
+    server.send(500, "application/json; charset=utf-8", errorBody); return;
   }
   // MBTiles uses TMS rows; Leaflet requests XYZ rows.
   const int tmsY = ((1 << z) - 1) - y;
@@ -1490,9 +1510,14 @@ void handleMbtilesTile(const String& mapName, int z, int x, int y) {
   sqlite3_bind_int(mbtilesTileStmt, 3, tmsY);
   const int rc = sqlite3_step(mbtilesTileStmt);
   if (rc != SQLITE_ROW) {
-    sqlite3_reset(mbtilesTileStmt);
-    server.send(404, "text/plain", "Tile not found");
-    return;
+    const String detail = rc == SQLITE_DONE
+      ? "Тайл отсутствует для этих z/x/y: точка может быть вне покрытия карты"
+      : "sqlite3_step вернул код " + String(rc) + ": " + String(sqlite3_errmsg(mbtilesDb));
+    mbtilesLastRc = rc; mbtilesLastError = detail; sqlite3_reset(mbtilesTileStmt);
+    JsonDocument errorDoc; errorDoc["error"] = detail; errorDoc["sqlite_rc"] = rc;
+    errorDoc["map"] = mapName; errorDoc["z"] = z; errorDoc["x"] = x; errorDoc["y_xyz"] = y; errorDoc["y_tms"] = tmsY;
+    String errorBody; serializeJson(errorDoc, errorBody);
+    server.send(rc == SQLITE_DONE ? 404 : 500, "application/json; charset=utf-8", errorBody); return;
   }
   const uint8_t* blob = static_cast<const uint8_t*>(sqlite3_column_blob(mbtilesTileStmt, 0));
   const int blobSize = sqlite3_column_bytes(mbtilesTileStmt, 0);
@@ -1536,20 +1561,34 @@ int readMbtilesMaxZoom(const String& mapName) {
 
 void handleMapInfo() {
   if (!server.hasArg("map") || !validMapName(server.arg("map"))) {
-    server.send(400, "application/json", R"({"error":"invalid map"})");
-    return;
+    server.send(400, "application/json", R"({"error":"invalid_map"})"); return;
   }
-  const String name = server.arg("map");
-  const String sdPath = "/maps/" + name + ".mbtiles";
-  const int maxZoom = SD_MMC.exists(sdPath) ? readMbtilesMaxZoom(name) : 16;
-  JsonDocument doc;
-  doc["name"] = name;
-  doc["maxZoom"] = maxZoom;
+  const String name = server.arg("map"), sdPath = "/maps/" + name + ".mbtiles";
+  JsonDocument doc; doc["name"] = name; doc["sd_ready"] = sdReady;
+  const bool exists = sdReady && SD_MMC.exists(sdPath); doc["file_exists"] = exists;
+  uint64_t fileSize = 0;
+  if (exists) { File f = SD_MMC.open(sdPath, FILE_READ); if (f) { fileSize = f.size(); f.close(); } }
+  doc["file_size_bytes"] = fileSize;
+  const bool dbOk = openMbtiles(name); doc["db_open"] = dbOk;
+  doc["sqlite_rc"] = mbtilesLastRc; doc["sqlite_error"] = mbtilesLastError;
+  int minZoom = -1, maxZoom = -1; long long tileCount = -1;
+  if (dbOk) {
+    sqlite3_stmt* stmt = nullptr;
+    const int rc = sqlite3_prepare_v2(mbtilesDb, "SELECT COUNT(*), MIN(zoom_level), MAX(zoom_level) FROM tiles", -1, &stmt, nullptr);
+    if (rc == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+      tileCount = sqlite3_column_int64(stmt, 0); minZoom = sqlite3_column_int(stmt, 1); maxZoom = sqlite3_column_int(stmt, 2);
+    } else {
+      mbtilesLastRc = rc; mbtilesLastError = "Ошибка чтения таблицы tiles: " + String(sqlite3_errmsg(mbtilesDb));
+      doc["db_open"] = false; doc["sqlite_rc"] = mbtilesLastRc; doc["sqlite_error"] = mbtilesLastError;
+    }
+    if (stmt) sqlite3_finalize(stmt);
+  }
+  doc["tile_count"] = tileCount; doc["min_zoom"] = minZoom; doc["maxZoom"] = maxZoom >= 0 ? maxZoom : 16;
   String out; serializeJson(doc, out);
-  server.send(200, "application/json", out);
+  server.send(dbOk && maxZoom >= 0 ? 200 : 500, "application/json; charset=utf-8", out);
 }
 
-void handleTile() {
+void handleTile()void handleTile() {
   if (!server.hasArg("map") || !server.hasArg("z") || !server.hasArg("x") || !server.hasArg("y")) {
     server.send(400, "text/plain", "Missing parameters");
     return;
@@ -1613,6 +1652,11 @@ void handleSimulatorStop() {
   satellites = 0;
   satellitesVisible = 0;
   server.send(200, "application/json", "{\"ok\":true,\"enabled\":false}");
+}
+
+void handleSystemReboot() {
+  server.send(200, "application/json; charset=utf-8", R"({"ok":true,"message":"ESP32 перезагружается"})");
+  delay(250); ESP.restart();
 }
 
 void handleDisplayTest() {
@@ -1735,6 +1779,7 @@ void setup() {
 
   server.on("/", HTTP_GET, handleRoot);
   server.on("/coords", HTTP_GET, handleCoords);
+  server.on("/system/reboot", HTTP_POST, handleSystemReboot);
   server.on("/points", HTTP_GET, handleSavedPoints);
   server.on("/points/save", HTTP_POST, handleSavePoint);
   server.on("/points/update", HTTP_POST, handleUpdatePoint);
