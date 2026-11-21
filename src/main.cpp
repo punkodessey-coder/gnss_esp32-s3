@@ -352,7 +352,7 @@ void processNmeaLine(const String& line) {
   }
 }
 
-String savedPointsResponse()String savedPointsResponse() {
+String savedPointsResponse() {
   String value = preferences.getString("points", "[]");
   if (value.length() == 0) value = "[]";
   return value;
@@ -1511,7 +1511,7 @@ bool openMbtiles(const String& mapName) {
   return true;
 }
 
-const char* tileMimeTypeconst char* tileMimeType(const uint8_t* data, int size) {
+const char* tileMimeType(const uint8_t* data, int size) {
   if (!data || size < 4) return "application/octet-stream";
   if (size >= 8 && data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G') return "image/png";
   if (data[0] == 0xFF && data[1] == 0xD8) return "image/jpeg";
