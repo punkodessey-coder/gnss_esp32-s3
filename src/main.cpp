@@ -9,6 +9,7 @@
 #include <Arduino_GFX_Library.h>
 #include <ImuDrv.hpp>
 #include <SD_MMC.h>
+#include <sqlite3.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
@@ -73,6 +74,9 @@ float avgGsvSnr = 0.0f;
 uint8_t gsvSnrCount = 0;
 GnssAiMonitor aiMonitor;
 bool sdReady = false;
+static sqlite3* mbtilesDb = nullptr;
+static sqlite3_stmt* mbtilesTileStmt = nullptr;
+static String mbtilesOpenName;
 bool aiLoggingEnabled = false;
 unsigned long lastFixMs = 0;
 unsigned long lastGgaMs = 0;
