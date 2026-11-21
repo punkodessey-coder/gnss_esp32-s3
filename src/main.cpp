@@ -780,7 +780,7 @@ async function selectMap(value){
       if(!infoResponse.ok||!info.db_open)throw new Error((info.sqlite_error||info.error||('HTTP '+infoResponse.status+' '+infoBody.slice(0,180)))+' | SQLite rc='+(info.sqlite_rc??'—'));
       const nativeZoom=Number.isInteger(info.maxZoom)?info.maxZoom:16;
       tileLayer=L.tileLayer('/tiles?map='+encodeURIComponent(name)+'&z={z}&x={x}&y={y}',{minZoom:0,maxZoom:19,maxNativeZoom:nativeZoom,attribution:'Offline map'});
-      setMapStatus('MBTiles OK · '+Number(info.tile_count||0).toLocaleString('ru-RU')+' тайлов · zoom '+info.min_zoom+'–'+nativeZoom,'good');
+      setMapStatus('MBTiles открыта · '+(Number(info.file_size_bytes||0)/1048576).toFixed(0)+' MiB · zoom '+info.min_zoom+'–'+nativeZoom,'good');
     }catch(e){setMapStatus('Ошибка MBTiles: '+e.message,'error');return;}
   }
   if(!tileLayer){setMapStatus('Неизвестный тип карты','error');return;}
