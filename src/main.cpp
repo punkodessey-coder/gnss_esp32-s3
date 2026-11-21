@@ -463,9 +463,7 @@ void handleRoot() {
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
 body{margin:0;padding:12px;background:#111;color:#eee;font-family:system-ui,sans-serif}
-.tabs{display:flex;gap:8px;margin-bottom:12px}
-.tab{padding:10px 16px;border-radius:8px;background:#333;color:#eee;border:0;font-size:15px}
-.tab.active{background:#2f81f7;color:#fff}
+.app-shell{display:flex;flex-direction:row-reverse;align-items:flex-start;gap:12px}.app-content{flex:1;min-width:0}.tabs{display:flex;flex-direction:column;gap:6px;width:112px;flex:0 0 112px;position:sticky;top:10px}.tab{width:100%;text-align:center;padding:10px 6px;border-radius:8px;background:#333;color:#eee;border:0;font-size:14px}.tab.active{background:#2f81f7;color:#fff}.fix-badge{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-weight:700;margin:8px 0}.fix-badge:before{content:'';width:10px;height:10px;border-radius:50%;background:currentColor}.fix-badge.has-fix{color:#37d67a;background:#123522}.fix-badge.no-fix{color:#ff6262;background:#3b1919}.map-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.map-status{min-height:22px;padding:9px 10px;margin-top:8px;border-radius:8px;background:#252525;color:#ddd;font-size:13px}.map-status.good{color:#58e18b}.map-status.error{color:#ff7777}.map-status.loading{color:#ffd166}
 .card{background:#1c1c1c;border-radius:14px;padding:16px;margin-bottom:12px}
 .metric{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #333;color:#aaa}
 .metric strong{color:#fff;font:600 18px ui-monospace,monospace}
@@ -483,23 +481,45 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 .ubx-field{display:grid;grid-template-columns:minmax(130px,1fr) minmax(120px,1fr);gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid #333}
 .ubx-field label{color:#bbb}.ubx-field input,.ubx-field select{width:100%}.ubx-checks{display:flex;flex-wrap:wrap;gap:14px}.ubx-checks label{display:flex;gap:6px;align-items:center}
 .ubx-actions{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}
-@media(max-width:650px){.ubx-layout{grid-template-columns:1fr}.ubx-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.ubx-nav-item{font-size:12px;padding:8px}.ubx-field{grid-template-columns:1fr}}
+@media(max-width:650px){body{padding:6px}.app-shell{gap:7px}.tabs{width:82px;flex-basis:82px;top:6px}.tab{font-size:11px;padding:9px 3px}.ubx-layout{grid-template-columns:1fr}.ubx-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.ubx-nav-item{font-size:12px;padding:8px}.ubx-field{grid-template-columns:1fr}#map{height:42vh}}
 
 </style>
 </head>
 <body>
+<div class="app-shell">
 <div class="tabs">
 <button id="tabGpsBtn" class="tab active" onclick="showTab('gps')">GPS</button>
 <button id="tabImuBtn" class="tab" onclick="showTab('imu')">IMU</button>
-<button id="tabUartBtn" class="tab" onclick="showTab('uart')">UART</button>
+<button id="tabTestsBtn" class="tab" onclick="showTab('tests')">Тесты</button>
 <button id="tabUbxBtn" class="tab" onclick="showTab('ubx')">u-blox</button>
 <button id="tabPointsBtn" class="tab" onclick="showTab('points')">Точки</button>
 <button id="tabAiBtn" class="tab" onclick="showTab('ai')">AI / ML</button>
 </div>
-
+<main class="app-content">
 <div id="gpsTab">
+<div class="card"><h2>Карта</h2>
+<div id="map"></div>
+<div class="small" style="margin-top:10px">Карта загружается по кнопке. Онлайн-слой подгружает тайлы видимой области вокруг текущей точки; при перемещении и изменении масштаба Leaflet запрашивает следующие тайлы. Для онлайн-карт интернет должен быть у телефона/планшета.</div>
+<div class="map-actions"><button class="gray" onclick="centerOnGps()">К текущей точке</button><span id="followStatus" class="small">Автоцентрирование включено</span></div>
+</div>
+<div class="card">
+<h3>Выбор карты</h3>
+<select id="mapSelect">
+<option value="">— Выберите карту —</option>
+<option value="online:osm">OpenStreetMap — онлайн</option>
+<option value="online:esri">Esri Satellite — онлайн</option>
+<option value="online:topo">OpenTopoMap — онлайн</option>
+<option value="online:yandex">Яндекс — гибрид</option>
+</select>
+<div class="ubx-field"><label for="yandexApiKey">API-ключ Яндекс.Карт</label><input id="yandexApiKey" type="password" autocomplete="off" placeholder="Вставьте API-ключ"></div>
+<div class="map-actions"><button class="gray" onclick="saveYandexKey()">Сохранить ключ</button><button onclick="loadSelectedMap()">Загрузить выбранную карту</button></div>
+<div class="ubx-field"><label for="fixTimeoutSeconds">Скрывать точку после потери координат (сек.)</label><input id="fixTimeoutSeconds" type="number" min="1" max="60" value="7"></div>
+<button class="gray" onclick="saveFixTimeout()">Сохранить тайм-аут</button>
+<div id="mapStatus" class="map-status">Выберите карту и нажмите «Загрузить»</div>
+</div>
 <div class="card gps-card">
 <h2>GNSS — текущее положение</h2>
+<div id="fixBadge" class="fix-badge no-fix">НЕТ ФИКСА</div>
 <div id="status" class="small">Ожидание данных…</div>
 <div class="metric"><span>Широта</span><strong id="latValue">0.000000</strong></div>
 <div class="metric"><span>Долгота</span><strong id="lngValue">0.000000</strong></div>
@@ -508,39 +528,12 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <div class="coords" id="coords">0.000000, 0.000000</div>
 <button onclick="copyCoords()">Скопировать координаты</button>
 <button class="gray" onclick="saveCurrentPoint()">Сохранить текущую точку</button>
-
-<button class="gray" onclick="testDisplay()">Тест экрана</button>
 <button class="gray" onclick="connectBle()">Подключить Bluetooth</button>
-<div class="card" style="margin-top:12px">
-<h3>Тестовый NMEA-генератор</h3>
-<div class="small">Имитирует движение по замкнутому маршруту в центре Сарова: один полный круг за 60 секунд. NMEA выходит через TX GPIO8 (57600 бод); для физического loopback подключите GPIO8 → GPS RX GPIO44 и общий GND.</div>
-<button onclick="startNmeaSimulator()">Включить имитацию</button>
-<button class="gray" onclick="stopNmeaSimulator()">Выключить</button>
-<div id="simulatorStatus" class="small">Имитатор выключен</div>
-</div>
 <div id="bleStatus" class="small"></div>
 </div>
-
-<div class="card">
-<h2>Карта</h2>
-<div class="small">Онлайн-карты требуют интернет на телефоне/ноутбуке. Яндекс Гибрид подключается через официальный JavaScript API и требует API-ключ.</div>
-<select id="mapSelect">
-<option value="online:osm">OpenStreetMap — онлайн</option>
-<option value="online:esri">Esri Satellite — онлайн</option>
-<option value="online:topo">OpenTopoMap — онлайн</option>
-<option value="online:yandex">Яндекс — гибрид</option>
-</select>
-<div class="ubx-field"><label for="yandexApiKey">API-ключ Яндекс.Карт</label><input id="yandexApiKey" type="password" autocomplete="off" placeholder="Вставьте API-ключ"></div>
-<button class="gray" onclick="saveYandexKey()">Сохранить ключ</button>
-<div class="ubx-field"><label for="fixTimeoutSeconds">Скрывать точку после потери координат (сек.)</label><input id="fixTimeoutSeconds" type="number" min="1" max="60" value="7"></div>
-<button class="gray" onclick="saveFixTimeout()">Сохранить тайм-аут</button>
-<div id="mapStatus" class="small">Загрузка списка офлайн-карт…</div>
 </div>
 
-<div id="map"></div>
-</div>
-
-<div id="uartTab" class="hidden">
+<div id="testsTab" class="hidden">
 <div class="card"><h2>Монитор UART GPS</h2>
 <div id="uartStatus" class="small">Ожидание данных UART…</div>
 <label for="uartBaud">Скорость UART GPS</label>
@@ -550,7 +543,12 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <pre id="uartStats" class="coords">—</pre>
 <h3>Последняя строка NMEA</h3><pre id="uartLast" class="coords">—</pre>
 <h3>Последние строки NMEA</h3><pre id="uartRecent" class="coords">—</pre>
-</div></div>
+</div>
+<div class="card"><h2>Тест координат</h2><div class="small">Проверка актуальности фикса, координат, количества спутников и HDOP.</div><button onclick="testCoordinates()">Проверить координаты</button><pre id="coordinateTestResult" class="coords">Тест ещё не запускался</pre></div>
+<div class="card"><h2>Тест чтения MBTiles</h2><div class="small">Проверяет открытие выбранной базы и чтение реального тайла в текущей точке. Если фикса нет, используется тестовая точка Сарова.</div><select id="mbtilesTestMap"><option value="">— Выберите офлайн-карту —</option></select><button onclick="testMbtiles()">Проверить чтение карты</button><pre id="mbtilesTestResult" class="coords">Тест ещё не запускался</pre></div>
+<div class="card"><h2>Аппаратные тесты</h2><button onclick="testDisplay()">Тест экрана</button><div class="small">Тест экрана временно показывает цветовые полосы на дисплее.</div></div>
+<div class="card"><h2>Тестовый NMEA-генератор</h2><div class="small">Имитирует движение по замкнутому маршруту в центре Сарова: один полный круг за 60 секунд. NMEA выходит через TX GPIO8 (57600 бод); для физического loopback подключите GPIO8 → GPS RX GPIO44 и общий GND.</div><button onclick="startNmeaSimulator()">Включить имитацию</button><button class="gray" onclick="stopNmeaSimulator()">Выключить</button><div id="simulatorStatus" class="small">Имитатор выключен</div></div>
+</div>
 <div id="ubxTab" class="hidden">
 <div class="card"><h2>u-blox — Configuration View</h2>
 <div class="small">Configuration View для u-blox 6 / NEO-6M. Поля и длины UBX-CFG пакетов соответствуют протоколу u-blox 6. GNSS: NEO-6M — GPS-приёмник; CFG-GNSS у этого поколения отсутствует, поэтому доступен статус GPS и настройка SBAS. «Считать» отправляет Poll, «Записать» — корректный Set.</div>
@@ -578,6 +576,7 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <div class="card">
 <h2>AI / ML — мониторинг навигации</h2>
 <div id="aiStatus" class="small">Ожидание данных…</div>
+<div class="card" style="background:#152235"><h3>Текущая ситуация</h3><div id="aiSituation" class="coords">Сбор телеметрии…</div></div>
 <div class="metric"><span>Соответствие базовому профилю</span><strong id="aiScore">—</strong></div>
 <div class="metric"><span>Состояние модели</span><strong id="aiRisk">—</strong></div>
 <div class="metric"><span>Обучающие интервалы</span><strong id="aiSamples">0</strong></div>
@@ -604,6 +603,8 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <div class="card"><h3>Калибровка гироскопа</h3><div class="small">Положите плату неподвижно на ровную поверхность во время калибровки.</div><button onclick="calibrateZero()">Откалибровать смещение</button><button class="gray" onclick="resetCalibration()">Сбросить калибровку</button></div>
 <div class="card"><h3>Доступные измерения</h3><div class="small">QMI8658 — 6-осевой IMU: три оси акселерометра и три оси гироскопа. Магнитометра и встроенного компаса на этой плате нет. Roll/Pitch вычисляются по вектору ускорения; yaw без магнитометра/внешней привязки не определяется.</div></div>
 </div>
+</main>
+</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
@@ -612,17 +613,18 @@ let tileLayer=null;
 let map=null, gpsMarker=null, currentFix=false;
 let currentLat=54.9227,currentLng=43.3448;
 let yandexMap=null,yandexCircle=null,yandexApiKey='';
+let followGps=true, mapLoadToken=0, mapTilesLoaded=0, mapTilesFailed=0;
 
 function showTab(name){
 document.getElementById('gpsTab').classList.toggle('hidden',name!=='gps');
 document.getElementById('imuTab').classList.toggle('hidden',name!=='imu');
-document.getElementById('uartTab').classList.toggle('hidden',name!=='uart');
+document.getElementById('testsTab').classList.toggle('hidden',name!=='tests');
 document.getElementById('ubxTab').classList.toggle('hidden',name!=='ubx');
 document.getElementById('pointsTab').classList.toggle('hidden',name!=='points');
 document.getElementById('aiTab').classList.toggle('hidden',name!=='ai');
 document.getElementById('tabGpsBtn').classList.toggle('active',name==='gps');
 document.getElementById('tabImuBtn').classList.toggle('active',name==='imu');
-document.getElementById('tabUartBtn').classList.toggle('active',name==='uart');
+document.getElementById('tabTestsBtn').classList.toggle('active',name==='tests');
 document.getElementById('tabUbxBtn').classList.toggle('active',name==='ubx');
 document.getElementById('tabPointsBtn').classList.toggle('active',name==='points');
 document.getElementById('tabAiBtn').classList.toggle('active',name==='ai');
@@ -630,12 +632,13 @@ if(name==='gps'){
   if(map) setTimeout(()=>map.invalidateSize(),150);
   if(yandexMap) setTimeout(()=>yandexMap.container.fitToViewport(),150);
 }
+if(name==='tests') refreshUart();
 if(name==='ubx' && !document.getElementById('ubxFields').children.length) selectUbxPage('gnss');
 }
 
 function initMap(){
   if(typeof L==='undefined'){document.getElementById('mapStatus').textContent='Leaflet не загрузилась — проверьте доступ к интернету';return false;}
-  if(!map) map=L.map('map').setView([54.9227,43.3448],15);
+  if(!map){map=L.map('map').setView([54.9227,43.3448],15);map.on('dragstart',disableGpsFollow);map.getContainer().addEventListener('wheel',disableGpsFollow,{passive:true});}
   return true;
 }
 async function loadYandexKey(){
@@ -671,71 +674,89 @@ async function loadYandexApi(){
   await new Promise(resolve=>window.ymaps.ready(resolve));
 }
 async function loadMaps(){
-  const select=document.getElementById('mapSelect');
+  const select=document.getElementById('mapSelect');let mapNames=[];
   try{
-    const d=await (await fetch('/maps')).json();
-    if(d.maps && d.maps.length){
-      const group=document.createElement('optgroup'); group.label='Офлайн-карты microSD';
-      d.maps.forEach(name=>{const option=document.createElement('option');option.value='sd:'+name;option.textContent=name;group.appendChild(option);});
-      select.appendChild(group);
-      document.getElementById('mapStatus').textContent='Найдено офлайн-карт: '+d.maps.length;
-    }else document.getElementById('mapStatus').textContent='На microSD нет карт в каталоге /maps';
-  }catch(e){document.getElementById('mapStatus').textContent='microSD недоступна; онлайн-карты требуют интернет на клиентском устройстве';}
-  await loadYandexKey();
-  selectMap('online:osm');
+    const d=await (await fetch('/maps')).json();mapNames=Array.isArray(d.maps)?d.maps:[];
+    if(mapNames.length){
+      const group=document.createElement('optgroup');group.label='Офлайн-карты microSD';
+      mapNames.forEach(name=>{const option=document.createElement('option');option.value='sd:'+name;option.textContent=name;group.appendChild(option);});
+      select.appendChild(group);setMapStatus('Найдено офлайн-карт: '+mapNames.length+'. Выберите карту и нажмите «Загрузить».','good');
+    }else setMapStatus('На microSD нет карт в каталоге /maps','error');
+  }catch(e){setMapStatus('microSD недоступна: '+e.message,'error');}
+  const testSelect=document.getElementById('mbtilesTestMap');
+  mapNames.forEach(name=>{const o=document.createElement('option');o.value=name;o.textContent=name;testSelect.appendChild(o);});
+  await loadYandexKey();initMap();
+}
+async function loadSelectedMap(){
+  const value=document.getElementById('mapSelect').value;
+  if(!value){setMapStatus('Сначала выберите карту','error');return;}
+  await selectMap(value);
+}
+function setMapStatus(message,state=''){
+  const el=document.getElementById('mapStatus');el.textContent=message;el.className='map-status'+(state?' '+state:'');
+}
+function disableGpsFollow(){if(!followGps)return;followGps=false;document.getElementById('followStatus').textContent='Ручное управление картой';}
+function centerOnGps(){
+  if(!currentFix){setMapStatus('Нет актуального GPS-фикса — центрировать некуда','error');return;}
+  followGps=true;document.getElementById('followStatus').textContent='Автоцентрирование включено';
+  if(yandexMap)yandexMap.setCenter([currentLat,currentLng],16,{duration:0});
+  else if(map)map.setView([currentLat,currentLng],Math.max(map.getZoom(),14),{animate:false});
+}
+function latLonToTile(lat,lon,z){
+  const n=Math.pow(2,z),r=Math.max(-85.05112878,Math.min(85.05112878,lat))*Math.PI/180;
+  return {x:Math.floor((lon+180)/360*n),y:Math.floor((1-Math.asinh(Math.tan(r))/Math.PI)/2*n)};
+}
+function attachTileProgress(layer,token,label){
+  mapTilesLoaded=0;mapTilesFailed=0;
+  layer.on('loading',()=>{if(token===mapLoadToken)setMapStatus(label+': загружаю тайлы…','loading');});
+  layer.on('tileload',()=>{if(token!==mapLoadToken)return;mapTilesLoaded++;setMapStatus(label+': загружено тайлов '+mapTilesLoaded+(mapTilesFailed?' · ошибок '+mapTilesFailed:''),'loading');});
+  layer.on('tileerror',()=>{if(token!==mapLoadToken)return;mapTilesFailed++;setMapStatus(label+': ошибка тайла ('+mapTilesFailed+'). Проверьте интернет или покрытие карты.','error');});
+  layer.on('load',()=>{if(token!==mapLoadToken)return;setMapStatus(mapTilesFailed?'Загрузка завершена с ошибками: '+mapTilesFailed+' тайлов не получено':'Карта загружена: '+mapTilesLoaded+' тайлов видимой области',mapTilesFailed?'error':'good');});
 }
 async function selectMap(value){
-  currentMap=value;
+  const token=++mapLoadToken;currentMap=value;setMapStatus('Подготовка карты…','loading');
   if(tileLayer && map){map.removeLayer(tileLayer);tileLayer=null;}
   if(yandexMap){yandexMap.destroy();yandexMap=null;yandexCircle=null;}
   if(value==='online:yandex'){
-    if(!yandexApiKey){document.getElementById('mapStatus').textContent='Для Яндекс Гибрид нужен API-ключ. Введите его выше и нажмите «Сохранить ключ».';return;}
+    if(!yandexApiKey){setMapStatus('Для Яндекс Гибрида нужен API-ключ. Сохраните ключ, затем нажмите «Загрузить».','error');return;}
     if(map){map.remove();map=null;gpsMarker=null;}
     try{
       await loadYandexApi();
       yandexMap=new ymaps.Map('map',{center:currentFix?[currentLat,currentLng]:[54.9227,43.3448],zoom:16,controls:['zoomControl']});
-      yandexMap.setType('yandex#hybrid');
-      if(currentFix) updateYandexPoint(currentLat,currentLng);
-      document.getElementById('mapStatus').textContent='Яндекс Гибрид загружен';
-    }catch(e){document.getElementById('mapStatus').textContent='Ошибка Яндекс.Карт: '+e.message;}
+      yandexMap.setType('yandex#hybrid');if(currentFix)updateYandexPoint(currentLat,currentLng);
+      setMapStatus('Яндекс Гибрид загружен; тайлы подгружаются в видимой области.','good');
+    }catch(e){setMapStatus('Ошибка Яндекс.Карт: '+e.message,'error');}
     return;
   }
   if(map){map.remove();map=null;gpsMarker=null;}
   if(!initMap())return;
-  if(value==='online:osm'){
-    tileLayer=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'});
-  }else if(value==='online:esri'){
-    tileLayer=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Tiles &copy; Esri'});
-  }else if(value==='online:topo'){
-    tileLayer=L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',{maxZoom:17,attribution:'&copy; OpenTopoMap'});
-  }else if(value.startsWith('sd:')){
+  if(value==='online:osm')tileLayer=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'});
+  else if(value==='online:esri')tileLayer=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Tiles &copy; Esri'});
+  else if(value==='online:topo')tileLayer=L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',{maxZoom:17,attribution:'&copy; OpenTopoMap'});
+  else if(value.startsWith('sd:')){
     const name=value.substring(3);
-    let nativeZoom=16;
-    try{
-      const info=await (await fetch('/maps/info?map='+encodeURIComponent(name))).json();
-      if(Number.isInteger(info.maxZoom)) nativeZoom=info.maxZoom;
-    }catch(e){}
-    tileLayer=L.tileLayer('/tiles?map='+encodeURIComponent(name)+'&z={z}&x={x}&y={y}',{minZoom:0,maxZoom:19,maxNativeZoom:nativeZoom,attribution:'Offline map'});
+    try{const infoResponse=await fetch('/maps/info?map='+encodeURIComponent(name)+'&ts='+Date.now());if(!infoResponse.ok)throw new Error('HTTP '+infoResponse.status);const info=await infoResponse.json();const nativeZoom=Number.isInteger(info.maxZoom)?info.maxZoom:16;
+      tileLayer=L.tileLayer('/tiles?map='+encodeURIComponent(name)+'&z={z}&x={x}&y={y}',{minZoom:0,maxZoom:19,maxNativeZoom:nativeZoom,attribution:'Offline map'});
+    }catch(e){setMapStatus('Ошибка проверки MBTiles: '+e.message,'error');return;}
   }
-  if(tileLayer)tileLayer.addTo(map);
-  if(currentFix) updateLeafletPoint(currentLat,currentLng);
-  document.getElementById('mapStatus').textContent=value.startsWith('sd:')?'Офлайн-карта: '+value.substring(3):'Онлайн-карта: '+value.substring(7).toUpperCase();
+  if(!tileLayer){setMapStatus('Неизвестный тип карты','error');return;}
+  attachTileProgress(tileLayer,token,value.startsWith('sd:')?'Офлайн '+value.substring(3):'Онлайн '+value.substring(7).toUpperCase());
+  tileLayer.addTo(map);
+  if(currentFix)updateLeafletPoint(currentLat,currentLng);else map.setView([54.9227,43.3448],value==='sd:world'?8:11,{animate:false});
+  setMapStatus(value.startsWith('sd:')?'Открываю MBTiles '+value.substring(3)+'…':'Запрашиваю тайлы вокруг точки…','loading');
 }
 function updateLeafletPoint(lat,lng){
   if(!map)return;
-  if(!gpsMarker){
-    gpsMarker=L.circleMarker([lat,lng],{radius:6,color:'#ffffff',weight:2,fillColor:'#1677ff',fillOpacity:1}).addTo(map);
-    map.setView([lat,lng],16);
-  }else gpsMarker.setLatLng([lat,lng]);
+  if(!gpsMarker)gpsMarker=L.circleMarker([lat,lng],{radius:6,color:'#ffffff',weight:2,fillColor:'#1677ff',fillOpacity:1}).addTo(map);
+  else gpsMarker.setLatLng([lat,lng]);
+  if(followGps)map.panTo([lat,lng],{animate:false});
 }
 function updateYandexPoint(lat,lng){
   if(!yandexMap)return;
   const coords=[lat,lng];
-  if(!yandexCircle){
-    yandexCircle=new ymaps.Circle([coords,5],{}, {fillColor:'#1677ffCC',strokeColor:'#ffffff',strokeWidth:2});
-    yandexMap.geoObjects.add(yandexCircle);
-    yandexMap.setCenter(coords,16);
-  }else yandexCircle.geometry.setCoordinates(coords);
+  if(!yandexCircle){yandexCircle=new ymaps.Circle([coords,5],{}, {fillColor:'#1677ffCC',strokeColor:'#ffffff',strokeWidth:2});yandexMap.geoObjects.add(yandexCircle);}
+  else yandexCircle.geometry.setCoordinates(coords);
+  if(followGps)yandexMap.setCenter(coords,16,{duration:0});
 }
 function removeCurrentMapPoint(){
   if(gpsMarker && map){map.removeLayer(gpsMarker);gpsMarker=null;}
@@ -793,6 +814,7 @@ try{
   document.getElementById('satVisibleValue').textContent=String(d.sat_visible??0);
   document.getElementById('coords').textContent=lat.toFixed(6)+', '+lng.toFixed(6);
   currentFix=!!d.valid;
+  const badge=document.getElementById('fixBadge');badge.textContent=d.valid?'GPS FIX':'НЕТ ФИКСА';badge.className='fix-badge '+(d.valid?'has-fix':'no-fix');
   if(d.fix_timeout_s && document.activeElement!==document.getElementById('fixTimeoutSeconds')){
     document.getElementById('fixTimeoutSeconds').value=d.fix_timeout_s;
   }
@@ -806,6 +828,24 @@ try{
   if(yandexMap) updateYandexPoint(lat,lng);
   else if(map) updateLeafletPoint(lat,lng);
 }catch(e){}
+}
+async function testCoordinates(){
+ const out=document.getElementById('coordinateTestResult');out.textContent='Проверяю…';
+ try{const r=await fetch('/coords?ts='+Date.now());if(!r.ok)throw new Error('HTTP '+r.status);const d=await r.json();out.textContent=d.valid?'PASS — актуальный фикс\\nШирота: '+Number(d.lat).toFixed(7)+'\\nДолгота: '+Number(d.lng).toFixed(7)+'\\nСпутников в решении: '+d.sat+'\\nВидно: '+d.sat_visible+'\\nHDOP: '+d.hdop+'\\nВозраст данных: '+Math.round(d.age_ms/1000)+' с':'FAIL — фикса нет или он устарел';}
+ catch(e){out.textContent='ОШИБКА: '+e.message;}
+}
+async function testMbtiles(){
+ const out=document.getElementById('mbtilesTestResult'),name=document.getElementById('mbtilesTestMap').value;
+ if(!name){out.textContent='Сначала выберите офлайн-карту';return;}out.textContent='Проверяю открытие базы…';
+ try{
+  const ir=await fetch('/maps/info?map='+encodeURIComponent(name)+'&ts='+Date.now());if(!ir.ok)throw new Error('Метаданные: HTTP '+ir.status);
+  const info=await ir.json(),z=Math.max(0,Math.min(Number(info.maxZoom)||9,name==='world'?9:11));
+  const lat=currentFix?currentLat:54.9227,lon=currentFix?currentLng:43.3448,t=latLonToTile(lat,lon,z);
+  const tr=await fetch('/tiles?map='+encodeURIComponent(name)+'&z='+z+'&x='+t.x+'&y='+t.y+'&ts='+Date.now(),{cache:'no-store'});
+  if(!tr.ok)throw new Error('База обнаружена, но тайл не прочитан: HTTP '+tr.status+' (возможно, точка вне покрытия)');
+  const blob=await tr.blob();if(!blob.size)throw new Error('Получен пустой тайл');if(!blob.type.startsWith('image/'))throw new Error('Неизвестный формат тайла: '+blob.type);
+  out.textContent='PASS — MBTiles открыта, тайл прочитан\\nКарта: '+name+'\\nZoom: '+z+' | X: '+t.x+' | Y: '+t.y+'\\nФормат: '+blob.type+'\\nРазмер: '+blob.size+' байт\\nКоординаты: '+lat.toFixed(6)+', '+lon.toFixed(6);
+ }catch(e){out.textContent='FAIL — '+e.message+'\\nПроверьте /maps/'+name+'.mbtiles и покрытие карты.';}
 }
 async function changeUartBaud(value){
  const r=await fetch('/uart/baud?baud='+encodeURIComponent(value),{method:'POST'});
@@ -1132,6 +1172,7 @@ async function refreshAi(){
     document.getElementById('aiSnr').textContent=d.avg_gsv_snr>0?Number(d.avg_gsv_snr).toFixed(1)+' ('+d.snr_satellites+' спутн.)':'Нет данных';
     document.getElementById('aiHdopTrend').textContent=Number(d.hdop_trend).toFixed(2);
     document.getElementById('aiSnrTrend').textContent=Number(d.snr_trend).toFixed(1);
+    document.getElementById('aiSituation').textContent=d.situation||'Сбор телеметрии…';
     document.getElementById('aiDetails').textContent='Модель: '+d.model_type+
       '\\nКод отклонения: '+d.anomaly_code+
       '\\nМаксимальное отклонение: '+Number(d.max_z_score).toFixed(2)+' σ'+
@@ -1212,13 +1253,12 @@ status.textContent='Bluetooth: '+e.message;
 }
 }
 
-document.getElementById('mapSelect').addEventListener('change',e=>selectMap(e.target.value));
+document.getElementById('mapSelect').addEventListener('change',()=>setMapStatus('Карта выбрана. Нажмите «Загрузить выбранную карту».'));
 setInterval(()=>{if(!document.getElementById('gpsTab').classList.contains('hidden'))refreshGps();},1000);
 setInterval(()=>{if(!document.getElementById('imuTab').classList.contains('hidden'))refreshImu();},200);
-setInterval(()=>{if(!document.getElementById('uartTab').classList.contains('hidden'))refreshUart();},500);
+setInterval(()=>{if(!document.getElementById('testsTab').classList.contains('hidden'))refreshUart();},500);
 setInterval(()=>{if(!document.getElementById('ubxTab').classList.contains('hidden'))refreshUbxStatus();},500);
 setInterval(()=>{if(!document.getElementById('aiTab').classList.contains('hidden'))refreshAi();},1000);
-refreshUart();
 selectUbxPage('gnss');
 loadMaps();
 refreshGps();
