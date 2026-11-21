@@ -400,6 +400,18 @@ String aiJson() {
   doc["snr_satellites"] = gsvSnrCount;
   doc["fix"] = haveFix;
   doc["hdop"] = hdop;
+  doc["accel_magnitude_mps2"] = imuReady ? sqrtf(ax*ax + ay*ay + az*az) : 0.0f;
+  doc["linear_accel_estimate_mps2"] = imuReady ? fabsf(sqrtf(ax*ax + ay*ay + az*az) - 9.80665f) : 0.0f;
+  String situation;
+  if (!haveFix) situation = "Нет актуального GNSS-фикса. Проверьте антенну, обзор неба и поток NMEA.";
+  else if (aiMonitor.mismatch()) situation = "Внимание: скорость по GNSS не согласуется с перемещением координат. Это повод проверить качество приёма и телеметрию, а не доказательство подмены сигнала.";
+  else if (aiMonitor.anomaly()) situation = "Обнаружено статистическое отклонение (" + String(aiMonitor.anomalyCode()) + "). Продолжается наблюдение за качеством GNSS.";
+  else if (satellites < 4 || hdop > 3.0) situation = "Фикс есть, но геометрия/количество спутников ограничивают точность. Спутников в решении: " + String(satellites) + ", HDOP: " + String(hdop, 1) + ".";
+  else if (String(aiMonitor.risk()) == "degrading") situation = "Качество спутникового сигнала ухудшается по тренду HDOP/SNR. Наблюдайте за изменением показателей.";
+  else if (!aiMonitor.trained()) situation = "Фикс получен. Модель собирает базовый профиль GNSS; для первичной оценки нужно не менее 12 интервалов.";
+  else situation = "GNSS фикс устойчив по текущим метрикам. Спутников в решении: " + String(satellites) + ", HDOP: " + String(hdop, 1) + ".";
+  situation += imuReady ? " IMU: модуль ускорения " + String(sqrtf(ax*ax + ay*ay + az*az), 2) + " м/с²; около 9,81 м/с² в покое — это гравитация." : " IMU не доступен.";
+  doc["situation"] = situation;
   doc["satellites_used"] = satellites;
   doc["satellites_visible"] = satellitesVisible;
   doc["gps_speed_mps"] = gps.speed.isValid() ? gps.speed.mps() : 0.0f;
@@ -638,7 +650,7 @@ if(name==='ubx' && !document.getElementById('ubxFields').children.length) select
 
 function initMap(){
   if(typeof L==='undefined'){document.getElementById('mapStatus').textContent='Leaflet не загрузилась — проверьте доступ к интернету';return false;}
-  if(!map){map=L.map('map').setView([54.9227,43.3448],15);map.on('dragstart',disableGpsFollow);map.getContainer().addEventListener('wheel',disableGpsFollow,{passive:true});}
+  if(!map){map=L.map('map').setView(currentFix?[currentLat,currentLng]:[54.9227,43.3448],currentFix?16:15);map.on('dragstart',disableGpsFollow);map.getContainer().addEventListener('wheel',disableGpsFollow,{passive:true});}
   return true;
 }
 async function loadYandexKey(){
@@ -1149,7 +1161,7 @@ document.getElementById('imuStatus').textContent='Датчик доступен 
 const f=(v,n=3)=>Number(v).toFixed(n);
 document.getElementById('imuData').textContent=
 'КОНФИГУРАЦИЯ\nI2C address: 0x'+Number(d.i2c_address).toString(16).toUpperCase()+'\nАкселерометр: ±'+d.accel_range_g+' g | Гироскоп: ±'+d.gyro_range_dps+' °/s\nЧастота настройки датчиков: '+d.sample_rate_hz+' Hz | Опрос: '+d.sample_period_ms+' ms'+
-'\n\nАКСЕЛЕРОМЕТР (m/s²)\nX: '+f(d.ax)+' | Y: '+f(d.ay)+' | Z: '+f(d.az)+'\nМодуль ускорения: '+f(d.accel_magnitude)+' m/s²'+
+'\n\nАКСЕЛЕРОМЕТР (m/s²)\nX: '+f(d.ax)+' | Y: '+f(d.ay)+' | Z: '+f(d.az)+'\nПолный модуль: '+f(d.accel_magnitude)+' m/s² (в покое около 9.81 — гравитация)'+
 '\n\nГИРОСКОП (°/s)\nX: '+f(d.gx)+' | Y: '+f(d.gy)+' | Z: '+f(d.gz)+'\nМодуль угловой скорости: '+f(d.gyro_magnitude)+' °/s'+
 '\n\nРАСЧЁТНАЯ ОРИЕНТАЦИЯ\nRoll: '+f(d.roll_deg,2)+'° | Pitch: '+f(d.pitch_deg,2)+'°\nYaw: недоступен без магнитометра/внешней привязки'+
 '\n\nКАЛИБРОВКА ГИРОСКОПА\nX: '+f(d.gyro_offset_x,4)+' | Y: '+f(d.gyro_offset_y,4)+' | Z: '+f(d.gyro_offset_z,4)+' °/s\nСтатус: '+(d.calibrated?'смещение сохранено':'смещение не задано')+
