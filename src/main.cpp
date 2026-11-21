@@ -417,8 +417,14 @@ String mapsJson() {
     File item = root.openNextFile();
 
     while (item) {
+      String itemName = String(item.name());
+      int slash = itemName.lastIndexOf('/');
+      if (slash >= 0) itemName = itemName.substring(slash + 1);
       if (item.isDirectory()) {
-        maps.add(String(item.name()));
+        if (validMapName(itemName)) maps.add(itemName);
+      } else if (itemName.endsWith(".mbtiles")) {
+        itemName.remove(itemName.length() - 8);
+        if (validMapName(itemName)) maps.add(itemName);
       }
       item.close();
       item = root.openNextFile();
