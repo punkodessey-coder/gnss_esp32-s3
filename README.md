@@ -56,3 +56,7 @@ PlatformIO: основная конфигурация `esp32s3`, тест экр
 ## Offline maps (feature/offline-mbtiles)
 
 - Existing Leaflet `/tiles` endpoint supports raster MBTiles (SQLite, JPG/PNG) and legacy XYZ PNG folders. See [docs/OFFLINE_MAPS.md](docs/OFFLINE_MAPS.md) for microSD layout and recommended map packages.
+
+## Offline maps for microSD
+
+The repository contains a PC-side `maps/` staging folder. Run `maps\\download_maps.ps1` to download the OpenAndroMaps world and Europe-MENA regional raster MBTiles packages. Then run `flash_windows.bat` and choose option 2 to flash firmware and copy the two map files to the `maps` folder on a microSD card visible as a Windows drive. Option 1 flashes firmware only. See [maps/README.md](maps/README.md) for package details and [docs/OFFLINE_MAPS.md](docs/OFFLINE_MAPS.md) for firmware format support.
