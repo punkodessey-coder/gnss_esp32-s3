@@ -492,12 +492,12 @@ void handleRoot() {
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
 body{margin:0;padding:12px;background:#111;color:#eee;font-family:system-ui,sans-serif}
-.app-shell{display:flex;flex-direction:row-reverse;align-items:flex-start;gap:12px}.app-content{flex:1;min-width:0}.tabs{display:flex;flex-direction:column;gap:6px;width:112px;flex:0 0 112px;position:sticky;top:10px}.tab{width:100%;text-align:center;padding:10px 6px;border-radius:8px;background:#333;color:#eee;border:0;font-size:14px}.tab.active{background:#2f81f7;color:#fff}.fix-badge{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-weight:700;margin:8px 0}.fix-badge:before{content:'';width:10px;height:10px;border-radius:50%;background:currentColor}.fix-badge.has-fix{color:#37d67a;background:#123522}.fix-badge.no-fix{color:#ff6262;background:#3b1919}.map-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.map-status{min-height:22px;padding:9px 10px;margin-top:8px;border-radius:8px;background:#252525;color:#ddd;font-size:13px}.map-status.good{color:#58e18b}.map-status.error{color:#ff7777}.map-status.loading{color:#ffd166}
+.app-shell{display:block;min-width:0}.app-content{width:100%;min-width:0}.top-menu{position:fixed;z-index:2000;right:12px;top:10px}.menu-toggle{width:44px;height:44px;border-radius:12px;background:#2f81f7;color:white;font-size:21px;padding:0;box-shadow:0 4px 16px #0008}.tabs{display:none;position:absolute;right:0;top:50px;width:210px;max-height:calc(100vh - 70px);overflow-y:auto;flex-direction:column;gap:6px;padding:10px;background:#1c1c1c;border:1px solid #444;border-radius:12px;box-shadow:0 8px 28px #000b}.tabs.open{display:flex}.tab{width:100%;text-align:left;padding:11px 12px;border-radius:8px;background:#333;color:#eee;border:0;font-size:14px}.tab.active{background:#2f81f7;color:#fff}.fix-badge{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-weight:700;margin:8px 0}.fix-badge:before{content:'';width:10px;height:10px;border-radius:50%;background:currentColor}.fix-badge.has-fix{color:#37d67a;background:#123522}.fix-badge.no-fix{color:#ff6262;background:#3b1919}.map-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.map-status{min-height:22px;padding:9px 10px;margin-top:8px;border-radius:8px;background:#252525;color:#ddd;font-size:13px}.map-status.good{color:#58e18b}.map-status.error{color:#ff7777}.map-status.loading{color:#ffd166}
 .card{background:#1c1c1c;border-radius:14px;padding:16px;margin-bottom:12px}
 .metric{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #333;color:#aaa}
 .metric strong{color:#fff;font:600 18px ui-monospace,monospace}
 .gps-card .coords{margin-top:14px;color:#8ab4ff}
-.coords,.imu{font-family:monospace;font-size:15px;word-break:break-word;white-space:pre-wrap;line-height:1.5}\n#uartStats,#uartLast,#uartRecent{font-size:13px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}\n#uartRecent{max-height:52vh;overflow:auto;background:#151515;border-radius:8px;padding:10px}
+.coords,.imu{font-family:monospace;font-size:15px;word-break:break-word;white-space:pre-wrap;line-height:1.5}\n#uartStats,#uartLast,#uartRecent{font-size:13px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}\n#uartRecent{height:96px;min-height:96px;max-height:96px;overflow:auto;background:#151515;border-radius:8px;padding:10px;box-sizing:border-box}#uartStats{height:106px;min-height:106px;max-height:106px;overflow:auto;box-sizing:border-box}#uartLast{height:52px;min-height:52px;max-height:52px;overflow:auto;box-sizing:border-box}.uart-monitor{height:380px;min-height:380px;max-height:380px;overflow:hidden;box-sizing:border-box;display:flex;flex-direction:column}.uart-monitor pre{flex:0 0 auto}
 button{padding:10px 14px;border:0;border-radius:8px;background:#2f81f7;color:#fff;font-size:15px;margin:4px 4px 0 0}
 button.gray{background:#555}
 #map{height:50vh;border-radius:12px}
@@ -510,22 +510,39 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 .ubx-field{display:grid;grid-template-columns:minmax(130px,1fr) minmax(120px,1fr);gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid #333}
 .ubx-field label{color:#bbb}.ubx-field input,.ubx-field select{width:100%}.ubx-checks{display:flex;flex-wrap:wrap;gap:14px}.ubx-checks label{display:flex;gap:6px;align-items:center}
 .ubx-actions{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}
-@media(max-width:650px){body{padding:6px}.app-shell{gap:7px}.tabs{width:82px;flex-basis:82px;top:6px}.tab{font-size:11px;padding:9px 3px}.ubx-layout{grid-template-columns:1fr}.ubx-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.ubx-nav-item{font-size:12px;padding:8px}.ubx-field{grid-template-columns:1fr}#map{height:42vh}}
+@media(max-width:650px){body{padding:6px;padding-top:62px}.top-menu{right:8px;top:8px}.tabs{width:min(240px,calc(100vw - 24px))}.ubx-layout{grid-template-columns:1fr}.ubx-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.ubx-nav-item{font-size:12px;padding:8px}.ubx-field{grid-template-columns:1fr}#map{height:42vh}}
 
 </style>
 </head>
 <body>
 <div class="app-shell">
-<div class="tabs">
-<button id="tabGpsBtn" class="tab active" onclick="showTab('gps')">GPS</button>
+<div class="top-menu"><button class="menu-toggle" id="menuToggle" aria-label="Открыть меню" onclick="toggleMenu()">☰</button>
+<div class="tabs" id="mainMenu">
+<button id="tabGpsBtn" class="tab active" onclick="showTab('gps')">Главная</button>
 <button id="tabImuBtn" class="tab" onclick="showTab('imu')">IMU</button>
 <button id="tabTestsBtn" class="tab" onclick="showTab('tests')">Тесты</button>
 <button id="tabUbxBtn" class="tab" onclick="showTab('ubx')">u-blox</button>
 <button id="tabPointsBtn" class="tab" onclick="showTab('points')">Точки</button>
 <button id="tabAiBtn" class="tab" onclick="showTab('ai')">AI / ML</button>
-</div>
+<button id="tabSystemBtn" class="tab" onclick="showTab('system')">Система / перезагрузка</button>
+</div></div>
 <main class="app-content">
 <div id="gpsTab">
+<div class="card gps-card">
+<h2>GNSS — текущее положение</h2>
+<div id="fixBadge" class="fix-badge no-fix">НЕТ ФИКСА</div>
+<div id="status" class="small">Ожидание данных…</div>
+<div class="metric"><span>Широта</span><strong id="latValue">0.000000</strong></div>
+<div class="metric"><span>Долгота</span><strong id="lngValue">0.000000</strong></div>
+<div class="metric"><span>Используется в решении (GGA)</span><strong id="satValue">0</strong></div>
+<div class="metric"><span>Видно по GSV</span><strong id="satVisibleValue">0</strong></div>
+<div class="metric"><span>Средний SNR (GSV)</span><strong id="gsvSnrValue">—</strong></div>
+<div class="coords" id="coords">0.000000, 0.000000</div>
+<button onclick="copyCoords()">Скопировать координаты</button>
+<button class="gray" onclick="saveCurrentPoint()">Сохранить текущую точку</button>
+<button class="gray" onclick="connectBle()">Подключить Bluetooth</button>
+<div id="bleStatus" class="small"></div>
+</div>
 <div class="card"><h2>Карта</h2>
 <div id="map"></div>
 <div class="small" style="margin-top:10px">Карта загружается по кнопке. Онлайн-слой подгружает тайлы видимой области вокруг текущей точки; при перемещении и изменении масштаба Leaflet запрашивает следующие тайлы. Для онлайн-карт интернет должен быть у телефона/планшета.</div>
@@ -546,32 +563,19 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <button class="gray" onclick="saveFixTimeout()">Сохранить тайм-аут</button>
 <div id="mapStatus" class="map-status">Выберите карту и нажмите «Загрузить»</div>
 </div>
-<div class="card gps-card">
-<h2>GNSS — текущее положение</h2>
-<div id="fixBadge" class="fix-badge no-fix">НЕТ ФИКСА</div>
-<div id="status" class="small">Ожидание данных…</div>
-<div class="metric"><span>Широта</span><strong id="latValue">0.000000</strong></div>
-<div class="metric"><span>Долгота</span><strong id="lngValue">0.000000</strong></div>
-<div class="metric"><span>Используется в решении</span><strong id="satValue">0</strong></div>
-<div class="metric"><span>Видно по GSV</span><strong id="satVisibleValue">0</strong></div>
-<div class="coords" id="coords">0.000000, 0.000000</div>
-<button onclick="copyCoords()">Скопировать координаты</button>
-<button class="gray" onclick="saveCurrentPoint()">Сохранить текущую точку</button>
-<button class="gray" onclick="connectBle()">Подключить Bluetooth</button>
-<div id="bleStatus" class="small"></div>
-</div>
+
 </div>
 
 <div id="testsTab" class="hidden">
 <div class="card"><h2>Монитор UART GPS</h2>
-<div id="uartStatus" class="small">Ожидание данных UART…</div>
+<div class="uart-monitor"><div id="uartStatus" class="small">Ожидание данных UART…</div>
 <label for="uartBaud">Скорость UART GPS</label>
 <select id="uartBaud" onchange="changeUartBaud(this.value)">
 <option>9600</option><option>19200</option><option>38400</option><option selected>57600</option><option>115200</option><option>230400</option>
 </select>
 <pre id="uartStats" class="coords">—</pre>
 <h3>Последняя строка NMEA</h3><pre id="uartLast" class="coords">—</pre>
-<h3>Последние строки NMEA</h3><pre id="uartRecent" class="coords">—</pre>
+<h3>Последние строки NMEA</h3><pre id="uartRecent" class="coords">—</pre></div>
 </div>
 <div class="card"><h2>Тест координат</h2><div class="small">Проверка актуальности фикса, координат, количества спутников и HDOP.</div><button onclick="testCoordinates()">Проверить координаты</button><pre id="coordinateTestResult" class="coords">Тест ещё не запускался</pre></div>
 <div class="card"><h2>Тест чтения MBTiles</h2><div class="small">Проверяет открытие выбранной базы и чтение реального тайла в текущей точке. Если фикса нет, используется тестовая точка Сарова.</div><select id="mbtilesTestMap"><option value="">— Выберите офлайн-карту —</option></select><button onclick="testMbtiles()">Проверить чтение карты</button><pre id="mbtilesTestResult" class="coords">Тест ещё не запускался</pre></div>
@@ -601,6 +605,7 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <details><summary>Последний ответ приёмника (диагностика)</summary><pre id="ubxFrame" class="coords">—</pre></details>
 </section></div></div></div>
 <div id="pointsTab" class="hidden"><div class="card"><h2>Сохранённые точки</h2><div class="small">Название и координаты сохранённых местоположений</div><div id="savedPointsList" class="small">Загрузка…</div></div></div>
+<div id="systemTab" class="hidden"><div class="card"><h2>Управление устройством</h2><p>Перезапуск контроллера ESP32-S3. Данные и файлы microSD не удаляются.</p><button class="danger" onclick="rebootDevice()">Перезагрузить ESP32</button><div id="rebootStatus" class="small">Контроллер работает</div></div></div>
 <div id="aiTab" class="hidden">
 <div class="card">
 <h2>AI / ML — мониторинг навигации</h2>
@@ -644,7 +649,11 @@ let currentLat=54.9227,currentLng=43.3448;
 let yandexMap=null,yandexCircle=null,yandexApiKey='';
 let followGps=true, mapLoadToken=0, mapTilesLoaded=0, mapTilesFailed=0;
 
+function toggleMenu(){document.getElementById('mainMenu').classList.toggle('open');}
 function showTab(name){
+document.getElementById('mainMenu').classList.remove('open');
+document.getElementById('systemTab').classList.toggle('hidden',name!=='system');
+document.getElementById('tabSystemBtn').classList.toggle('active',name==='system');
 document.getElementById('gpsTab').classList.toggle('hidden',name!=='gps');
 document.getElementById('imuTab').classList.toggle('hidden',name!=='imu');
 document.getElementById('testsTab').classList.toggle('hidden',name!=='tests');
@@ -662,6 +671,7 @@ if(name==='gps'){
   if(yandexMap) setTimeout(()=>yandexMap.container.fitToViewport(),150);
 }
 if(name==='tests') refreshUart();
+if(name==='system') document.getElementById('rebootStatus').textContent='Контроллер работает';
 if(name==='ubx' && !document.getElementById('ubxFields').children.length) selectUbxPage('gnss');
 }
 
@@ -702,7 +712,7 @@ async function loadYandexApi(){
   await window.__yandexMapsPromise;
   await new Promise(resolve=>window.ymaps.ready(resolve));
 }
-async function loadMaps(){
+async async function loadMaps(){
   const select=document.getElementById('mapSelect');let mapNames=[];
   try{
     const d=await (await fetch('/maps')).json();mapNames=Array.isArray(d.maps)?d.maps:[];
@@ -739,10 +749,10 @@ function attachTileProgress(layer,token,label){
   mapTilesLoaded=0;mapTilesFailed=0;
   layer.on('loading',()=>{if(token===mapLoadToken)setMapStatus(label+': загружаю тайлы…','loading');});
   layer.on('tileload',()=>{if(token!==mapLoadToken)return;mapTilesLoaded++;setMapStatus(label+': загружено тайлов '+mapTilesLoaded+(mapTilesFailed?' · ошибок '+mapTilesFailed:''),'loading');});
-  layer.on('tileerror',()=>{if(token!==mapLoadToken)return;mapTilesFailed++;setMapStatus(label+': ошибка тайла ('+mapTilesFailed+'). Проверьте интернет или покрытие карты.','error');});
+  layer.on('tileerror',async (event)=>{if(token!==mapLoadToken)return;mapTilesFailed++;let detail='ошибка тайла';try{const response=await fetch(event.tile.src,{cache:'no-store'});const body=await response.text();detail='HTTP '+response.status+' '+body.slice(0,220);}catch(e){detail=e.message||String(e);}if(token===mapLoadToken)setMapStatus(label+': '+detail,'error');});
   layer.on('load',()=>{if(token!==mapLoadToken)return;setMapStatus(mapTilesFailed?'Загрузка завершена с ошибками: '+mapTilesFailed+' тайлов не получено':'Карта загружена: '+mapTilesLoaded+' тайлов видимой области',mapTilesFailed?'error':'good');});
 }
-async function selectMap(value){
+async async function selectMap(value){
   const token=++mapLoadToken;currentMap=value;setMapStatus('Подготовка карты…','loading');
   if(tileLayer && map){map.removeLayer(tileLayer);tileLayer=null;}
   if(yandexMap){yandexMap.destroy();yandexMap=null;yandexCircle=null;}
@@ -832,7 +842,7 @@ async function deletePoint(id){
  await fetch('/points/delete?id='+encodeURIComponent(id),{method:'POST'}); refreshSavedPoints();
 }
 
-async function refreshGps(){
+async async function refreshGps(){
 try{
   const d=await (await fetch('/coords?ts='+Date.now())).json();
   const lat=d.valid?Number(d.lat):0;
@@ -841,6 +851,7 @@ try{
   document.getElementById('lngValue').textContent=lng.toFixed(6);
   document.getElementById('satValue').textContent=String(d.sat??0);
   document.getElementById('satVisibleValue').textContent=String(d.sat_visible??0);
+document.getElementById('gsvSnrValue').textContent=d.gsv_snr_count?Number(d.gsv_snr_avg).toFixed(1)+' dB ('+d.gsv_snr_count+')':'—';
   document.getElementById('coords').textContent=lat.toFixed(6)+', '+lng.toFixed(6);
   currentFix=!!d.valid;
   const badge=document.getElementById('fixBadge');badge.textContent=d.valid?'GPS FIX':'НЕТ ФИКСА';badge.className='fix-badge '+(d.valid?'has-fix':'no-fix');
@@ -857,6 +868,13 @@ try{
   if(yandexMap) updateYandexPoint(lat,lng);
   else if(map) updateLeafletPoint(lat,lng);
 }catch(e){}
+}
+async function rebootDevice(){
+ const out=document.getElementById('rebootStatus');
+ if(!confirm('Перезагрузить ESP32-S3?'))return;
+ out.textContent='Отправляю команду…';
+ try{const r=await fetch('/system/reboot',{method:'POST'});const body=await r.text();if(!r.ok)throw new Error('HTTP '+r.status+': '+body);out.textContent='Команда принята. ESP32 перезагружается; точка доступа временно исчезнет.';}
+ catch(e){out.textContent='Ответ потерян или ошибка: '+e.message+'. Подождите 10–20 секунд и подключитесь снова.';}
 }
 async function testCoordinates(){
  const out=document.getElementById('coordinateTestResult');out.textContent='Проверяю…';
@@ -1152,7 +1170,7 @@ async function refreshUbxStatus(){
     }else if(d.event)document.getElementById('ubxStatus').textContent=d.event;
   }catch(e){}
 }
-async function refreshUart(){
+async async function refreshUart(){
  const status=document.getElementById('uartStatus');
  try{
   // Query token avoids stale responses and avoids Safari RequestInit/cache quirks.
