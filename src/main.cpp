@@ -1488,8 +1488,8 @@ void handleMapInfo() {
     return;
   }
   const String name = server.arg("map");
-  const String path = String(SD_MOUNT) + "/maps/" + name + ".mbtiles";
-  const int maxZoom = SD_MMC.exists(path) ? readMbtilesMaxZoom(name) : 16;
+  const String sdPath = "/maps/" + name + ".mbtiles";
+  const int maxZoom = SD_MMC.exists(sdPath) ? readMbtilesMaxZoom(name) : 16;
   JsonDocument doc;
   doc["name"] = name;
   doc["maxZoom"] = maxZoom;
@@ -1514,7 +1514,7 @@ void handleTile() {
   }
 
   // Prefer a single-file MBTiles archive; keep legacy XYZ PNG directories compatible.
-  String mbtilesPath = String(SD_MOUNT) + "/maps/" + mapName + ".mbtiles";
+  String mbtilesPath = "/maps/" + mapName + ".mbtiles";
   if (SD_MMC.exists(mbtilesPath)) {
     long zi = z.toInt(), xi = x.toInt(), yi = y.toInt();
     if (z.length() == 0 || x.length() == 0 || y.length() == 0 ||
