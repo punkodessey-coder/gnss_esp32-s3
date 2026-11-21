@@ -35,21 +35,19 @@ if not exist "%~dp0firmware.bin" (
 )
 
 if "%COPY_MAPS%"=="1" (
-  if not exist "%~dp0maps\world.mbtiles" goto DOWNLOAD_MAPS
-  if not exist "%~dp0maps\european_russia.mbtiles" goto DOWNLOAD_MAPS
-  goto MAPS_READY
-
-  :DOWNLOAD_MAPS
-  echo.
-  echo One or both offline map files are missing. Downloading them now...
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0maps\download_maps.ps1"
-  if errorlevel 1 (
-    echo [ERROR] Map download failed. Firmware has not been flashed.
-    pause
-    exit /b 1
+  set "NEED_MAPS=0"
+  if not exist "%~dp0maps\world.mbtiles" set "NEED_MAPS=1"
+  if not exist "%~dp0maps\european_russia.mbtiles" set "NEED_MAPS=1"
+  if "!NEED_MAPS!"=="1" (
+    echo.
+    echo One or both offline map files are missing. Downloading them now...
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0maps\download_maps.ps1"
+    if errorlevel 1 (
+      echo [ERROR] Map download failed. Firmware has not been flashed.
+      pause
+      exit /b 1
+    )
   )
-
-  :MAPS_READY
   if not exist "%~dp0maps\world.mbtiles" (
     echo [ERROR] world.mbtiles is missing.
     pause
