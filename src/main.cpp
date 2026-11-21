@@ -83,6 +83,14 @@ GnssAiMonitor aiMonitor;
 bool sdReady = false;
 String mbtilesLastError = "База ещё не открывалась";
 int mbtilesLastRc = SQLITE_OK;
+static String mbtilesDiagnosticLog;
+static void logMbtilesDiagnostic(const String& message) {
+  String line = "[" + String(millis()) + " ms] " + message + "\n";
+  Serial.print("[MBTiles] "); Serial.print(line);
+  mbtilesDiagnosticLog += line;
+  if (mbtilesDiagnosticLog.length() > 6000)
+    mbtilesDiagnosticLog.remove(0, mbtilesDiagnosticLog.length() - 6000);
+}
 static sqlite3* mbtilesDb = nullptr;
 static sqlite3_stmt* mbtilesTileStmt = nullptr;
 static String mbtilesOpenName;
@@ -589,7 +597,7 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <h3>Последние строки NMEA</h3><pre id="uartRecent" class="coords">—</pre></div>
 </div>
 <div class="card"><h2>Тест координат</h2><div class="small">Проверка актуальности фикса, координат, количества спутников и HDOP.</div><button onclick="testCoordinates()">Проверить координаты</button><pre id="coordinateTestResult" class="coords">Тест ещё не запускался</pre></div>
-<div class="card"><h2>Тест чтения MBTiles</h2><div class="small">Проверяет открытие выбранной базы и чтение реального тайла в текущей точке. Если фикса нет, используется тестовая точка Сарова.</div><select id="mbtilesTestMap"><option value="">— Выберите офлайн-карту —</option></select><button onclick="testMbtiles()">Проверить чтение карты</button><pre id="mbtilesTestResult" class="coords">Тест ещё не запускался</pre></div>
+<div class="card"><h2>Тест чтения MBTiles</h2><div class="small">Проверяет открытие выбранной базы и чтение реального тайла в текущей точке. Если фикса нет, используется тестовая точка Сарова.</div><select id="mbtilesTestMap"><option value="">— Выберите офлайн-карту —</option></select><button onclick="testMbtiles()">Проверить чтение карты</button><button class="gray" onclick="downloadMbtilesLogs()">Скачать журнал MBTiles</button><pre id="mbtilesTestResult" class="coords">Тест ещё не запускался</pre></div>
 <div class="card"><h2>Аппаратные тесты</h2><button onclick="testDisplay()">Тест экрана</button><div class="small">Тест экрана временно показывает цветовые полосы на дисплее.</div></div>
 <div class="card"><h2>Тестовый NMEA-генератор</h2><div class="small">Имитирует движение по замкнутому маршруту в центре Сарова: один полный круг за 60 секунд. NMEA выходит через TX GPIO8 (57600 бод); для физического loopback подключите GPIO8 → GPS RX GPIO44 и общий GND.</div><button onclick="startNmeaSimulator()">Включить имитацию</button><button class="gray" onclick="stopNmeaSimulator()">Выключить</button><div id="simulatorStatus" class="small">Имитатор выключен</div></div>
 </div>
@@ -913,6 +921,16 @@ async function testCoordinates(){
  try{const r=await fetch('/coords?ts='+Date.now());if(!r.ok)throw new Error('HTTP '+r.status);const d=await r.json();out.textContent=d.valid?'PASS — актуальный фикс\nШирота: '+Number(d.lat).toFixed(7)+'\nДолгота: '+Number(d.lng).toFixed(7)+'\nСпутников в решении: '+d.sat+'\nВидно: '+d.sat_visible+'\nHDOP: '+d.hdop+'\nВозраст данных: '+Math.round(d.age_ms/1000)+' с':'FAIL — фикса нет или он устарел';}
  catch(e){out.textContent='ОШИБКА: '+e.message;}
 }
+async function downloadMbtilesLogs(){
+ try{
+  const r=await fetch('/maps/logs?ts='+Date.now(),{cache:'no-store'});
+  const body=await r.text();if(!r.ok)throw new Error('HTTP '+r.status+': '+body);
+  const data=JSON.parse(body);
+  const textLog='ESP32 MBTiles diagnostics\nSD mounted: '+data.sd_ready+'\nMap open: '+data.map_open+'\nFile size: '+data.file_size_bytes+'\nSQLite rc: '+data.sqlite_rc+'\nLast error: '+data.sqlite_error+'\n\n'+(data.log||'(no log entries)');
+  const url=URL.createObjectURL(new Blob([textLog],{type:'text/plain;charset=utf-8'}));
+  const a=document.createElement('a');a.href=url;a.download='mbtiles-diagnostics.txt';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+ }catch(e){document.getElementById('mbtilesTestResult').textContent+='\nНе удалось выгрузить журнал: '+e.message;}
+}
 async function testMbtiles(){
  const out=document.getElementById('mbtilesTestResult'),name=document.getElementById('mbtilesTestMap').value;
  if(!name){out.textContent='Сначала выберите офлайн-карту';return;}out.textContent='Проверяю открытие базы…';
@@ -923,10 +941,16 @@ async function testMbtiles(){
   const z=Math.max(0,Math.min(Number(info.maxZoom)||9,name==='world'?9:11));
   const lat=currentFix?currentLat:54.9227,lon=currentFix?currentLng:43.3448,t=latLonToTile(lat,lon,z);
   const tr=await fetch('/tiles?map='+encodeURIComponent(name)+'&z='+z+'&x='+t.x+'&y='+t.y+'&ts='+Date.now(),{cache:'no-store'});
-  if(!tr.ok)throw new Error('База обнаружена, но тайл не прочитан: HTTP '+tr.status+' (возможно, точка вне покрытия)');
+  if(!tr.ok){
+    const errorBody=await tr.text();let errorInfo={};try{errorInfo=JSON.parse(errorBody);}catch(e){}
+    let diagnostic='База обнаружена, но тайл не прочитан: HTTP '+tr.status+'\nОтвет ESP32: '+errorBody.slice(0,1200);
+    if(errorInfo.sqlite_rc!==undefined)diagnostic+='\nSQLite rc: '+errorInfo.sqlite_rc;
+    try{const lr=await fetch('/maps/logs?ts='+Date.now(),{cache:'no-store'});const ld=await lr.json();diagnostic+='\nПоследняя ошибка: '+(ld.sqlite_error||'—')+'\nЖурнал:\n'+(ld.log||'пусто');}catch(logError){diagnostic+='\nНе удалось получить журнал: '+logError.message;}
+    throw new Error(diagnostic);
+  }
   if(tr.headers.get('X-Tile-Missing'))throw new Error('Тайл отсутствует в базе для z/x/y — точка вне покрытия');const blob=await tr.blob();if(!blob.size)throw new Error('Получен пустой тайл');if(!blob.type.startsWith('image/'))throw new Error('Неизвестный формат тайла: '+blob.type);
   out.textContent='PASS — MBTiles открыта, тайл прочитан\nКарта: '+name+'\nZoom: '+z+' | X: '+t.x+' | Y: '+t.y+'\nФормат: '+blob.type+'\nРазмер: '+blob.size+' байт\nКоординаты: '+lat.toFixed(6)+', '+lon.toFixed(6);
- }catch(e){out.textContent='FAIL — '+e.message+'\nПроверьте /maps/'+name+'.mbtiles и покрытие карты.';}
+ }catch(e){out.textContent='FAIL — '+e.message+'\nДля выгрузки нажмите «Скачать журнал MBTiles».';}
 }
 async function changeUartBaud(value){
  const r=await fetch('/uart/baud?baud='+encodeURIComponent(value),{method:'POST'});
@@ -1539,20 +1563,22 @@ static void closeMbtiles() {
 }
 
 bool openMbtiles(const String& mapName) {
-  if (!sdReady) { mbtilesLastRc = SQLITE_CANTOPEN; mbtilesLastError = "microSD не смонтирована"; return false; }
-  if (!validMapName(mapName)) { mbtilesLastRc = SQLITE_MISUSE; mbtilesLastError = "Недопустимое имя карты"; return false; }
+  if (!sdReady) { mbtilesLastRc = SQLITE_CANTOPEN; mbtilesLastError = "microSD не смонтирована"; logMbtilesDiagnostic(mbtilesLastError); return false; }
+  if (!validMapName(mapName)) { mbtilesLastRc = SQLITE_MISUSE; mbtilesLastError = "Недопустимое имя карты"; logMbtilesDiagnostic(mbtilesLastError); return false; }
   if (mbtilesDb && mbtilesOpenName == mapName && mbtilesTileStmt) return true;
   closeMbtiles();
   const String sdPath = "/maps/" + mapName + ".mbtiles";
-  if (!SD_MMC.exists(sdPath)) { mbtilesLastRc = SQLITE_CANTOPEN; mbtilesLastError = "Файл не найден на microSD: " + sdPath; return false; }
+  if (!SD_MMC.exists(sdPath)) { mbtilesLastRc = SQLITE_CANTOPEN; mbtilesLastError = "Файл не найден на microSD: " + sdPath; logMbtilesDiagnostic(mbtilesLastError); return false; }
   mbtilesFileSize = 0;
   { File f = SD_MMC.open(sdPath, FILE_READ); if (f) { mbtilesFileSize = f.size(); f.close(); } }
   const String dbPath = String(SD_MOUNT) + sdPath;
+  logMbtilesDiagnostic("OPEN map=" + mapName + " SD=" + sdPath + " SQLite=" + dbPath + " size=" + String((unsigned long long)mbtilesFileSize));
   int rc = sqlite3_open_v2(dbPath.c_str(), &mbtilesDb, SQLITE_OPEN_READONLY, nullptr);
   if (rc != SQLITE_OK || !mbtilesDb) {
     mbtilesLastRc = rc;
     mbtilesLastError = "sqlite3_open_v2(" + dbPath + "): " + String(mbtilesDb ? sqlite3_errmsg(mbtilesDb) : "нет SQLite handle");
     Serial.printf("MBTiles open failed (%d): %s\n", rc, mbtilesLastError.c_str());
+    logMbtilesDiagnostic("OPEN FAILED rc=" + String(rc) + " (" + String(sqlite3_errstr(rc)) + "): " + mbtilesLastError);
     if (mbtilesDb) sqlite3_close(mbtilesDb);
     mbtilesDb = nullptr; return false;
   }
@@ -1562,11 +1588,13 @@ bool openMbtiles(const String& mapName) {
   if (rc != SQLITE_OK) {
     mbtilesLastRc = rc; mbtilesLastError = "SQL prepare таблицы tiles: " + String(sqlite3_errmsg(mbtilesDb));
     Serial.printf("MBTiles query prepare failed (%d): %s\n", rc, mbtilesLastError.c_str());
+    logMbtilesDiagnostic("PREPARE FAILED rc=" + String(rc) + " (" + String(sqlite3_errstr(rc)) + "): " + mbtilesLastError);
     sqlite3_close(mbtilesDb); mbtilesDb = nullptr; mbtilesTileStmt = nullptr; return false;
   }
   mbtilesReadZoomRange();
   mbtilesLastRc = SQLITE_OK; mbtilesLastError = "SQLite открыл базу, таблица tiles доступна";
   mbtilesOpenName = mapName; Serial.printf("MBTiles opened: %s (zoom %d-%d)\n", dbPath.c_str(), mbtilesMinZoom, mbtilesMaxZoom);
+  logMbtilesDiagnostic("OPEN OK map=" + mapName + " zoom=" + String(mbtilesMinZoom) + "-" + String(mbtilesMaxZoom));
   return true;
 }
 
@@ -1606,7 +1634,7 @@ void handleMbtilesTile(const String& mapName, int z, int x, int y) {
     const String detail = rc == SQLITE_DONE
       ? "Тайл отсутствует для этих z/x/y: точка может быть вне покрытия карты"
       : "sqlite3_step вернул код " + String(rc) + ": " + String(sqlite3_errmsg(mbtilesDb));
-    if (rc != SQLITE_DONE) { mbtilesLastRc = rc; mbtilesLastError = detail; }
+    if (rc != SQLITE_DONE) { mbtilesLastRc = rc; mbtilesLastError = detail; logMbtilesDiagnostic("TILE READ FAILED map=" + mapName + " z=" + String(z) + " x=" + String(x) + " yXYZ=" + String(y) + " yTMS=" + String(tmsY) + " rc=" + String(rc) + " (" + String(sqlite3_errstr(rc)) + "): " + String(sqlite3_errmsg(mbtilesDb))); }
     sqlite3_reset(mbtilesTileStmt);
     if (rc == SQLITE_DONE) { sendBlankTile(); return; }
     JsonDocument errorDoc; errorDoc["error"] = detail; errorDoc["sqlite_rc"] = rc;
@@ -1637,6 +1665,19 @@ void handleMbtilesTile(const String& mapName, int z, int x, int y) {
     stalls = 0; p += written; remaining -= (int)written;
   }
   sqlite3_reset(mbtilesTileStmt);
+}
+
+void handleMbtilesLogs() {
+  JsonDocument doc;
+  doc["sd_ready"] = sdReady;
+  doc["map_open"] = mbtilesOpenName;
+  doc["file_size_bytes"] = mbtilesFileSize;
+  doc["sqlite_rc"] = mbtilesLastRc;
+  doc["sqlite_error"] = mbtilesLastError;
+  doc["log"] = mbtilesDiagnosticLog;
+  String out; serializeJson(doc, out);
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json; charset=utf-8", out);
 }
 
 void handleMapInfo() {
@@ -1903,6 +1944,7 @@ void setup() {
   server.on("/uart", HTTP_GET, handleUart);
   server.on("/maps", HTTP_GET, handleMaps);
   server.on("/maps/info", HTTP_GET, handleMapInfo);
+  server.on("/maps/logs", HTTP_GET, handleMbtilesLogs);
   server.on("/maps/yandex-key", HTTP_GET, handleYandexKeyGet);
   server.on("/maps/yandex-key", HTTP_POST, handleYandexKeySet);
   server.on("/settings/fix-timeout", HTTP_POST, handleSetFixTimeout);
