@@ -710,7 +710,12 @@ async function selectMap(value){
     tileLayer=L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',{maxZoom:17,attribution:'&copy; OpenTopoMap'});
   }else if(value.startsWith('sd:')){
     const name=value.substring(3);
-    tileLayer=L.tileLayer('/tiles?map='+encodeURIComponent(name)+'&z={z}&x={x}&y={y}',{minZoom:0,maxZoom:19,maxNativeZoom:16,attribution:'Offline map'});
+    let nativeZoom=16;
+    try{
+      const info=await (await fetch('/maps/info?map='+encodeURIComponent(name))).json();
+      if(Number.isInteger(info.maxZoom)) nativeZoom=info.maxZoom;
+    }catch(e){}
+    tileLayer=L.tileLayer('/tiles?map='+encodeURIComponent(name)+'&z={z}&x={x}&y={y}',{minZoom:0,maxZoom:19,maxNativeZoom:nativeZoom,attribution:'Offline map'});
   }
   if(tileLayer)tileLayer.addTo(map);
   if(currentFix) updateLeafletPoint(currentLat,currentLng);
@@ -1452,6 +1457,46 @@ void handleMbtilesTile(const String& mapName, int z, int x, int y) {
   sqlite3_reset(mbtilesTileStmt);
 }
 
+int readMbtilesMaxZoom(const String& mapName) {
+  String path = String(SD_MOUNT) + "/maps/" + mapName + ".mbtiles";
+  sqlite3* db = nullptr;
+  if (sqlite3_open_v2(path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK || !db) {
+    if (db) sqlite3_close(db);
+    return 16;
+  }
+  sqlite3_stmt* stmt = nullptr;
+  int maxZoom = -1;
+  if (sqlite3_prepare_v2(db, "SELECT value FROM metadata WHERE name='maxzoom' LIMIT 1", -1, &stmt, nullptr) == SQLITE_OK &&
+      sqlite3_step(stmt) == SQLITE_ROW) {
+    const unsigned char* value = sqlite3_column_text(stmt, 0);
+    if (value) maxZoom = atoi(reinterpret_cast<const char*>(value));
+  }
+  if (stmt) sqlite3_finalize(stmt);
+  if (maxZoom < 0 || maxZoom > 22) {
+    stmt = nullptr;
+    if (sqlite3_prepare_v2(db, "SELECT MAX(zoom_level) FROM tiles", -1, &stmt, nullptr) == SQLITE_OK &&
+        sqlite3_step(stmt) == SQLITE_ROW) maxZoom = sqlite3_column_int(stmt, 0);
+    if (stmt) sqlite3_finalize(stmt);
+  }
+  sqlite3_close(db);
+  return (maxZoom >= 0 && maxZoom <= 22) ? maxZoom : 16;
+}
+
+void handleMapInfo() {
+  if (!server.hasArg("map") || !validMapName(server.arg("map"))) {
+    server.send(400, "application/json", R"({"error":"invalid map"})");
+    return;
+  }
+  const String name = server.arg("map");
+  const String path = String(SD_MOUNT) + "/maps/" + name + ".mbtiles";
+  const int maxZoom = SD_MMC.exists(path) ? readMbtilesMaxZoom(name) : 16;
+  JsonDocument doc;
+  doc["name"] = name;
+  doc["maxZoom"] = maxZoom;
+  String out; serializeJson(doc, out);
+  server.send(200, "application/json", out);
+}
+
 void handleTile() {
   if (!server.hasArg("map") || !server.hasArg("z") || !server.hasArg("x") || !server.hasArg("y")) {
     server.send(400, "text/plain", "Missing parameters");
@@ -1652,6 +1697,7 @@ void setup() {
   server.on("/ai/dataset", HTTP_GET, handleAiDataset);
   server.on("/uart", HTTP_GET, handleUart);
   server.on("/maps", HTTP_GET, handleMaps);
+  server.on("/maps/info", HTTP_GET, handleMapInfo);
   server.on("/maps/yandex-key", HTTP_GET, handleYandexKeyGet);
   server.on("/maps/yandex-key", HTTP_POST, handleYandexKeySet);
   server.on("/settings/fix-timeout", HTTP_POST, handleSetFixTimeout);
