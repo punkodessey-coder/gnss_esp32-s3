@@ -35,6 +35,15 @@ A practical balance is:
 
 For a true hybrid, combine satellite imagery with a transparent labels/roads overlay on the desktop during tile generation, producing one raster MBTiles file. This avoids requiring a second Leaflet layer and extra rendering on the ESP32. If keeping separate layers, firmware/UI work is needed to expose an overlay layer.
 
+## Concrete ready-made raster MBTiles
+
+For a global overview map, OpenAndroMaps publishes actual raster JPG MBTiles:
+- `OAM-World-1-9-J80.mbtiles`: about 1.5 GB, world overview through zoom level 9.
+- `OAM-World-1-8-J80.mbtiles`: about 458 MB, smaller world overview through zoom level 8.
+- `OAM-W1-7-D8-13-J70.mbtiles`: about 1.6 GB, world overview at zoom 1–7 plus Germany at zoom 8–13.
+
+The current firmware can serve these JPG tiles directly. The source's download index is https://osm.mathematik.tu-darmstadt.de/openstreetmap/openandromaps/world/ . Choose the map that covers the actual operating area; the Germany add-on is only a sensible regional choice if the device is primarily used in Germany.
+
 ## Data source and licensing
 
 - OpenStreetMap data can be used to create a self-hosted raster map. Include visible attribution: © OpenStreetMap contributors. Do not bulk-download the public `tile.openstreetmap.org` tile service for offline use; use a self-hosted renderer or a provider that explicitly permits offline downloads.
