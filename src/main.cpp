@@ -128,6 +128,9 @@ static int mbtilesMinZoom = -1, mbtilesMaxZoom = -1;
 static uint64_t mbtilesFileSize = 0;
 bool aiLoggingEnabled = false;
 bool situationLoggingEnabled = false;
+bool aiReferenceEnabled = false;
+double aiReferenceLat = 0.0, aiReferenceLon = 0.0;
+float aiReferenceRadiusM = 50.0f;
 uint16_t reportIntervalSeconds = 300;
 unsigned long lastSituationLogMs = 0;
 unsigned long lastBleMessageMs = 0;
@@ -518,6 +521,12 @@ void logAiDatasetRow() {
   file.close();
 }
 
+float aiDistanceMeters(double lat1,double lon1,double lat2,double lon2) {
+  const double rad=0.017453292519943295;
+  const double dLat=(lat2-lat1)*rad,dLon=(lon2-lon1)*rad;
+  const double a=sin(dLat/2)*sin(dLat/2)+cos(lat1*rad)*cos(lat2*rad)*sin(dLon/2)*sin(dLon/2);
+  return (float)(6371000.0*2.0*atan2(sqrt(a),sqrt(fmax(0.0,1.0-a))));
+}
 String aiJson() {
   JsonDocument doc;
   doc["enabled"] = true;
@@ -543,6 +552,14 @@ String aiJson() {
   doc["snr_satellites"] = gsvSnrCount;
   doc["fix"] = haveFix;
   doc["coordinates_available"] = coordinatesAvailable;
+  doc["logging_enabled"] = aiLoggingEnabled;
+  doc["reference_enabled"] = aiReferenceEnabled;
+  doc["reference_lat"] = aiReferenceEnabled ? aiReferenceLat : 0.0;
+  doc["reference_lon"] = aiReferenceEnabled ? aiReferenceLon : 0.0;
+  doc["reference_radius_m"] = aiReferenceRadiusM;
+  const float referenceDistance=(aiReferenceEnabled&&haveFix&&coordinatesAvailable)?aiDistanceMeters(aiReferenceLat,aiReferenceLon,lat,lng):-1.0f;
+  doc["reference_distance_m"] = referenceDistance;
+  doc["outside_reference"] = referenceDistance>=0.0f&&referenceDistance>aiReferenceRadiusM;
   doc["coordinate_source"] = coordinateSource;
   doc["coordinate_age_ms"] = coordinatesAvailable ? (long)(millis() - lastCoordinateMs) : -1;
   doc["hdop"] = hdop;
@@ -580,6 +597,14 @@ String aiJson() {
   }
   if (imuReady) reasons += " IMU доступен, но акселерометр и гироскоп не откалиброваны и исключены из оценки GNSS-целостности.";
   else reasons += " IMU недоступен и не участвует в оценке.";
+  String classification=String(aiMonitor.risk());
+  if(aiReferenceEnabled&&haveFix&&coordinatesAvailable){
+    if(referenceDistance>aiReferenceRadiusM){
+      if(satellites>=4&&avgGsvSnr>=25.0f){classification="spoofing_suspected";verdict="ПОДОЗРЕНИЕ НА ПОДМЕНУ КООРДИНАТ";situation="FIX получен, но позиция вне контрольного радиуса при относительно сохранном уровне сигналов.";reasons="Отклонение "+String(referenceDistance,1)+" м при допуске "+String(aiReferenceRadiusM,1)+" м. Это подозрительный признак, но не доказательство спуфинга.";}
+      else{classification="position_deviation_with_weak_signal";verdict="ПОЗИЦИЯ ВНЕ КОНТРОЛЬНОЙ ЗОНЫ — СЛАБЫЙ ПРИЁМ";situation="Координаты вышли за допустимый радиус, качество приёма снижено.";reasons="Отклонение "+String(referenceDistance,1)+" м; спутников в решении: "+String(satellites)+"; средний SNR: "+String(avgGsvSnr,1)+" дБ.";}
+    }else{classification="inside_reference";if(!aiMonitor.anomaly()){verdict="НОРМА — КООРДИНАТЫ В ДОПУСТИМОЙ ЗОНЕ";situation="Текущая позиция находится в пределах контрольного радиуса.";reasons="Отклонение "+String(referenceDistance,1)+" м из допустимых "+String(aiReferenceRadiusM,1)+" м. Качество сигналов оценивается отдельно.";}}
+  }else if(!haveFix&&satellitesVisible>0&&avgGsvSnr>0&&avgGsvSnr<20.0f){classification="interference_possible";verdict="ВОЗМОЖНЫ ПОМЕХИ GNSS";situation="Фикс отсутствует, а наблюдаемый уровень сигналов низкий.";reasons="Возможны помехи или слабое покрытие; по NMEA нельзя доказать глушение.";}
+  doc["classification"]=classification;
   doc["situation"] = situation;
   doc["verdict"] = verdict;
   doc["reasons"] = reasons;
@@ -1695,15 +1720,25 @@ void handleAiReset() {
 }
 void handleAiLogging() {
   const bool enabled = server.arg("enabled") == "1";
-  if (enabled && !sdReady) {
-    server.send(503, "application/json", R"({"enabled":false,"error":"microSD недоступна"})");
-    return;
+  if (enabled && !sdReady) { server.send(503,"application/json",R"({"enabled":false,"error":"microSD недоступна"})"); return; }
+  if(enabled&&!aiLoggingEnabled){
+    if(SD_MMC.exists("/ai_dataset.csv"))SD_MMC.remove("/ai_dataset.csv");
+    File fresh=SD_MMC.open("/ai_dataset.csv",FILE_WRITE);
+    if(!fresh){server.send(500,"application/json",R"({"enabled":false,"error":"Не удалось создать новый CSV"})");return;}
+    fresh.println("millis,fix,lat,lon,speed_mps,hdop,sat_used,sat_visible,gsv_snr_avg,accel_magnitude,gyro_magnitude,profile_score,anomaly,anomaly_code,risk,motion");fresh.close();
   }
-  aiLoggingEnabled = enabled;
-  JsonDocument doc; doc["enabled"] = aiLoggingEnabled;
-  String out; serializeJson(doc, out);
-  server.send(200, "application/json", out);
+  aiLoggingEnabled=enabled;preferences.putBool("ai_log_on",enabled);
+  JsonDocument doc;doc["enabled"]=enabled;String out;serializeJson(doc,out);server.send(200,"application/json",out);
 }
+void handleAiReference(){
+  if(!server.hasArg("lat")||!server.hasArg("lon")||!server.hasArg("radius")){server.send(400,"application/json",R"({"ok":false,"error":"Нужны lat, lon и radius"})");return;}
+  double la=server.arg("lat").toDouble(),lo=server.arg("lon").toDouble();float radius=server.arg("radius").toFloat();
+  if(!isfinite(la)||!isfinite(lo)||fabs(la)>90||fabs(lo)>180||!isfinite(radius)||radius<5||radius>5000){server.send(400,"application/json",R"({"ok":false,"error":"Некорректные координаты или радиус"})");return;}
+  aiReferenceLat=la;aiReferenceLon=lo;aiReferenceRadiusM=radius;aiReferenceEnabled=true;
+  preferences.putBool("ai_ref_on",true);preferences.putDouble("ai_ref_lat",la);preferences.putDouble("ai_ref_lon",lo);preferences.putFloat("ai_ref_rad",radius);
+  server.send(200,"application/json",R"({"ok":true,"message":"Контрольная точка сохранена"})");
+}
+void handleAiReferenceClear(){aiReferenceEnabled=false;preferences.putBool("ai_ref_on",false);server.send(200,"application/json",R"({"ok":true})");}
 void handleAiProfileDownload() {
   JsonDocument doc; doc["format"]="gnss-ai-profile-v1"; doc["role"]=aiMonitor.profileRole();
   doc["feature_mask"]=aiMonitor.profileMask(); doc["threshold"]=aiMonitor.profileThreshold();
@@ -2468,6 +2503,11 @@ void setup() {
   Wire.setClock(100000);
 
   preferences.begin("imu", false);
+  aiLoggingEnabled=preferences.getBool("ai_log_on",false);
+  aiReferenceEnabled=preferences.getBool("ai_ref_on",false);
+  aiReferenceLat=preferences.getDouble("ai_ref_lat",0.0);
+  aiReferenceLon=preferences.getDouble("ai_ref_lon",0.0);
+  aiReferenceRadiusM=preferences.getFloat("ai_ref_rad",50.0f);
   if (!preferences.isKey("points")) preferences.putString("points", "[]");
   reportIntervalSeconds = preferences.getUShort("report_sec", 300);
   if (reportIntervalSeconds < 10 || reportIntervalSeconds > 1800) reportIntervalSeconds = 300;
@@ -2542,6 +2582,8 @@ void setup() {
   server.on("/ai/profile", HTTP_POST, handleAiProfileUpload);
   server.on("/ai/reset", HTTP_POST, handleAiReset);
   server.on("/ai/logging", HTTP_POST, handleAiLogging);
+  server.on("/ai/reference", HTTP_POST, handleAiReference);
+  server.on("/ai/reference/clear", HTTP_POST, handleAiReferenceClear);
   server.on("/ai/situation-logging", HTTP_POST, handleSituationLogging);
   server.on("/ai/report-interval", HTTP_POST, handleReportInterval);
   server.on("/ai/situation-log", HTTP_GET, handleSituationLogDownload);
