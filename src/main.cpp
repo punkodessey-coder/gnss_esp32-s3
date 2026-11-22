@@ -530,10 +530,10 @@ body{margin:0;padding:64px 12px 12px;background:#111;color:#eee;font-family:syst
 .gps-card .coords{margin-top:14px;color:#8ab4ff}
 .coords,.imu{font-family:monospace;font-size:15px;word-break:break-word;white-space:pre-wrap;line-height:1.5}
 #uartStats,#uartLast,#uartRecent{font-size:13px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
-#uartRecent{height:96px;min-height:96px;max-height:96px;overflow:auto;background:#151515;border-radius:8px;padding:10px;box-sizing:border-box}#uartStats{height:106px;min-height:106px;max-height:106px;overflow:auto;box-sizing:border-box}#uartLast{height:52px;min-height:52px;max-height:52px;overflow:auto;box-sizing:border-box}.uart-monitor{height:440px;min-height:440px;max-height:440px;overflow:hidden;box-sizing:border-box;display:flex;flex-direction:column}.uart-monitor pre{flex:0 0 auto}
+#uartRecent{min-height:72px;max-height:220px;overflow:auto;background:#151515;border-radius:8px;padding:10px;box-sizing:border-box}#uartStats,#uartLast{min-height:0;max-height:180px;overflow:auto;box-sizing:border-box}.uart-monitor{min-height:0;max-height:none;overflow:visible;box-sizing:border-box;display:flex;flex-direction:column;gap:8px}.uart-monitor pre{flex:0 1 auto;width:100%;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
 button{padding:10px 14px;border:0;border-radius:8px;background:#2f81f7;color:#fff;font-size:15px;margin:4px 4px 0 0}
 button.gray{background:#555}
-#map{height:50vh;border-radius:12px}
+.map-controls{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.map-controls select{flex:1;min-width:180px}.map-progress{display:flex;gap:10px;align-items:center;font-size:12px;color:#bbb;margin:6px 0}.map-progress progress{flex:1;height:10px;min-width:80px}#map{height:50vh;border-radius:12px}
 .small{color:#aaa;font-size:13px}
 .hidden{display:none}
 select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;border:1px solid #444;max-width:100%;box-sizing:border-box}
@@ -577,25 +577,10 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <div id="bleStatus" class="small"></div>
 </div>
 <div class="card"><h2>Карта</h2>
-<div id="map"></div>
-<div class="small" style="margin-top:10px">Карта загружается по кнопке. Онлайн-слой подгружает тайлы видимой области вокруг текущей точки; при перемещении и изменении масштаба Leaflet запрашивает следующие тайлы. Для онлайн-карт интернет должен быть у телефона/планшета.</div>
+<div class="map-controls"><select id="mapSelect"><option value="">— Выберите карту —</option><option value="online:osm">OpenStreetMap — онлайн</option></select><button onclick="loadSelectedMap()">Загрузить карту</button></div><div class="map-progress"><progress id="tileProgress" max="1" value="0"></progress><span id="tileProgressText">Ожидание тайлов</span></div><div id="map"></div><div class="small">OpenStreetMap — единственная онлайн-карта. Остальные карты загружаются с microSD.</div>
 <div class="map-actions"><button class="gray" onclick="centerOnGps()">К текущей точке</button><span id="followStatus" class="small">Автоцентрирование включено</span></div>
 </div>
-<div class="card">
-<h3>Выбор карты</h3>
-<select id="mapSelect">
-<option value="">— Выберите карту —</option>
-<option value="online:osm">OpenStreetMap — онлайн</option>
-<option value="online:esri">Esri Satellite — онлайн</option>
-<option value="online:topo">OpenTopoMap — онлайн</option>
-<option value="online:yandex">Яндекс — гибрид</option>
-</select>
-<div class="ubx-field"><label for="yandexApiKey">API-ключ Яндекс.Карт</label><input id="yandexApiKey" type="password" autocomplete="off" placeholder="Вставьте API-ключ"></div>
-<div class="map-actions"><button class="gray" onclick="saveYandexKey()">Сохранить ключ</button><button onclick="loadSelectedMap()">Загрузить выбранную карту</button></div>
-<div class="ubx-field"><label for="fixTimeoutSeconds">Скрывать точку после потери координат (сек.)</label><input id="fixTimeoutSeconds" type="number" min="1" max="60" value="7"></div>
-<button class="gray" onclick="saveFixTimeout()">Сохранить тайм-аут</button>
-<div id="mapStatus" class="map-status">Выберите карту и нажмите «Загрузить»</div>
-</div>
+<div class="card"><div class="ubx-field"><label for="fixTimeoutSeconds">Скрывать точку после потери координат (сек.)</label><input id="fixTimeoutSeconds" type="number" min="1" max="60" value="7"></div><button class="gray" onclick="saveFixTimeout()">Сохранить тайм-аут</button><div id="mapStatus" class="map-status">Загрузка карты…</div></div>
 
 </div>
 
@@ -643,7 +628,7 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <h2>Устройство — сведения о прошивке</h2>
 <div id="firmwareInfo" class="coords">Загрузка сведений…</div>
 <button class="gray" onclick="loadFirmwareInfo()">Обновить сведения</button>
-<button onclick="downloadCurrentFirmware()">Выгрузить установленную прошивку (.bin)</button>
+<button onclick="downloadCurrentFirmware()">Выгрузить установленную прошивку (.zip)</button>
 <div class="small">Сохраняется точный образ запущенного приложения. Файл можно использовать как резервную копию.</div>
 </div>
 <div class="card">
@@ -746,40 +731,8 @@ function ensureLeaflet(){
 }
 function initMap(){
   if(typeof L==='undefined'){document.getElementById('mapStatus').textContent='Leaflet не найдена: скопируйте leaflet.js/leaflet.css в /lib на microSD (maps/download_maps.ps1 делает это) или подключите телефон к интернету';return false;}
-  if(!map){map=L.map('map').setView(currentFix?[currentLat,currentLng]:[54.9227,43.3448],currentFix?16:15);map.on('dragstart',disableGpsFollow);map.getContainer().addEventListener('wheel',disableGpsFollow,{passive:true});}
+  if(!map){map=L.map('map').setView(currentFix?[currentLat,currentLng]:[59.9386,30.3141],currentFix?16:11);map.on('dragstart',disableGpsFollow);map.getContainer().addEventListener('wheel',disableGpsFollow,{passive:true});}
   return true;
-}
-async function loadYandexKey(){
-  try{
-    const d=await (await fetch('/maps/yandex-key')).json();
-    yandexApiKey=d.key||'';
-    if(yandexApiKey) document.getElementById('yandexApiKey').value=yandexApiKey;
-  }catch(e){}
-}
-async function saveYandexKey(){
-  const key=document.getElementById('yandexApiKey').value.trim();
-  try{
-    const r=await fetch('/maps/yandex-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key})});
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    yandexApiKey=key;
-    window.__yandexMapsPromise=null;
-    document.getElementById('mapStatus').textContent=key?'Ключ сохранён. Загружаю Яндекс Гибрид…':'Ключ удалён';
-    if(key) await selectMap('online:yandex');
-  }catch(e){document.getElementById('mapStatus').textContent='Не удалось сохранить ключ Яндекса: '+e.message;}
-}
-async function loadYandexApi(){
-  if(window.ymaps) { await new Promise(resolve=>window.ymaps.ready(resolve)); return; }
-  if(!window.__yandexMapsPromise){
-    window.__yandexMapsPromise=new Promise((resolve,reject)=>{
-      const script=document.createElement('script');
-      script.src='https://api-maps.yandex.ru/2.1/?apikey='+encodeURIComponent(yandexApiKey)+'&lang=ru_RU';
-      script.onload=()=>resolve();
-      script.onerror=()=>reject(new Error('Не удалось загрузить JavaScript API Яндекса'));
-      document.head.appendChild(script);
-    });
-  }
-  await window.__yandexMapsPromise;
-  await new Promise(resolve=>window.ymaps.ready(resolve));
 }
 async function loadMaps(){
   const select=document.getElementById('mapSelect');let mapNames=[];
@@ -793,7 +746,7 @@ async function loadMaps(){
   }catch(e){setMapStatus('microSD недоступна: '+e.message,'error');}
   const testSelect=document.getElementById('mbtilesTestMap');
   mapNames.forEach(name=>{const o=document.createElement('option');o.value=name;o.textContent=name;testSelect.appendChild(o);});
-  await loadYandexKey();ensureLeaflet().then(ok=>{if(ok&&!map&&!yandexMap)initMap();});
+  const world=mapNames.find(n=>/world/i.test(n));const defaultValue=world?'sd:'+world:'online:osm';select.value=defaultValue;if(await ensureLeaflet()){initMap();await selectMap(defaultValue);}
 }
 async function loadSelectedMap(){
   const value=document.getElementById('mapSelect').value;
@@ -807,8 +760,7 @@ function disableGpsFollow(){if(!followGps)return;followGps=false;document.getEle
 function centerOnGps(){
   if(!currentFix){setMapStatus('Нет актуального GPS-фикса — центрировать некуда','error');return;}
   followGps=true;document.getElementById('followStatus').textContent='Автоцентрирование включено';
-  if(yandexMap)yandexMap.setCenter([currentLat,currentLng],16,{duration:0});
-  else if(map)map.setView([currentLat,currentLng],Math.max(map.getZoom(),14),{animate:false});
+  if(map)map.setView([currentLat,currentLng],Math.max(map.getZoom(),14),{animate:false});
 }
 function latLonToTile(lat,lon,z){
   const n=Math.pow(2,z),r=Math.max(-85.05112878,Math.min(85.05112878,lat))*Math.PI/180;
@@ -816,18 +768,14 @@ function latLonToTile(lat,lon,z){
 }
 function attachTileProgress(layer,token,label){
   mapTilesLoaded=0;mapTilesFailed=0;
-  layer.on('loading',()=>{if(token===mapLoadToken)setMapStatus(label+': загружаю тайлы…','loading');});
-  layer.on('tileload',()=>{if(token!==mapLoadToken)return;mapTilesLoaded++;setMapStatus(label+': загружено тайлов '+mapTilesLoaded+(mapTilesFailed?' · ошибок '+mapTilesFailed:''),'loading');});
-  layer.on('tileerror',async (event)=>{if(token!==mapLoadToken)return;mapTilesFailed++;if(mapTilesFailed>1){setMapStatus(label+': загружено '+mapTilesLoaded+' · без тайла (вне покрытия): '+mapTilesFailed,'loading');return;}let detail='ошибка тайла';try{const response=await fetch(event.tile.src,{cache:'no-store'});const body=await response.text();detail='HTTP '+response.status+' '+body.slice(0,220);}catch(e){detail=e.message||String(e);}if(token===mapLoadToken)setMapStatus(label+': '+detail,'error');});
-  layer.on('load',()=>{if(token!==mapLoadToken)return;setMapStatus(mapTilesFailed?'Загрузка завершена с ошибками: '+mapTilesFailed+' тайлов не получено':'Карта загружена: '+mapTilesLoaded+' тайлов видимой области',mapTilesFailed?'error':'good');});
+  let pending=0;const progress=document.getElementById('tileProgress'),progressText=document.getElementById('tileProgressText');const paint=()=>{if(token!==mapLoadToken)return;const total=mapTilesLoaded+mapTilesFailed+pending;progress.max=Math.max(1,total);progress.value=mapTilesLoaded+mapTilesFailed;progressText.textContent='Загружено '+mapTilesLoaded+' · в очереди '+pending+' · ошибок '+mapTilesFailed;setMapStatus(label+': '+progressText.textContent,'loading');};layer.on('loading',()=>{pending=0;mapTilesLoaded=0;mapTilesFailed=0;paint();});layer.on('tileloadstart',()=>{pending++;paint();});layer.on('tileload',()=>{if(token!==mapLoadToken)return;pending=Math.max(0,pending-1);mapTilesLoaded++;paint();});
+  layer.on('tileerror',async (event)=>{if(token!==mapLoadToken)return;pending=Math.max(0,pending-1);mapTilesFailed++;if(mapTilesFailed>1){setMapStatus(label+': загружено '+mapTilesLoaded+' · без тайла (вне покрытия): '+mapTilesFailed,'loading');return;}let detail='ошибка тайла';try{const response=await fetch(event.tile.src,{cache:'no-store'});const body=await response.text();detail='HTTP '+response.status+' '+body.slice(0,220);}catch(e){detail=e.message||String(e);}if(token===mapLoadToken)setMapStatus(label+': '+detail,'error');});
+  layer.on('load',()=>{if(token!==mapLoadToken)return;pending=0;progress.max=Math.max(1,mapTilesLoaded+mapTilesFailed);progress.value=mapTilesLoaded;progressText.textContent='Завершено: '+mapTilesLoaded+' тайлов · ошибок '+mapTilesFailed;setMapStatus(mapTilesFailed?'Загрузка завершена с ошибками: '+mapTilesFailed+' тайлов не получено':'Карта загружена: '+mapTilesLoaded+' тайлов видимой области',mapTilesFailed?'error':'good');});
 }
 async function selectMap(value){
   const token=++mapLoadToken;currentMap=value;setMapStatus('Подготовка карты…','loading');
   if(tileLayer && map){map.removeLayer(tileLayer);tileLayer=null;}
-  if(yandexMap){yandexMap.destroy();yandexMap=null;yandexCircle=null;}
-  if(value==='online:yandex'){
-    if(!yandexApiKey){setMapStatus('Для Яндекс Гибрида нужен API-ключ. Сохраните ключ, затем нажмите «Загрузить».','error');return;}
-    if(map){map.remove();map=null;gpsMarker=null;}
+  if(map){map.remove();map=null;gpsMarker=null;}
     try{
       await loadYandexApi();
       yandexMap=new ymaps.Map('map',{center:currentFix?[currentLat,currentLng]:[54.9227,43.3448],zoom:16,controls:['zoomControl']});
@@ -841,8 +789,7 @@ async function selectMap(value){
   if(!await ensureLeaflet()||token!==mapLoadToken){if(token===mapLoadToken)initMap();return;}
   if(!initMap())return;
   if(value==='online:osm')tileLayer=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'});
-  else if(value==='online:esri')tileLayer=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Tiles &copy; Esri'});
-  else if(value==='online:topo')tileLayer=L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',{maxZoom:17,attribution:'&copy; OpenTopoMap'});
+
   else if(value.startsWith('sd:')){
     const name=value.substring(3);
     try{
@@ -941,8 +888,7 @@ document.getElementById('gsvSnrValue').textContent=d.gsv_snr_count?Number(d.gsv_
   }
   currentLat=lat; currentLng=lng;
   document.getElementById('status').textContent='Используется: '+(d.sat??0)+' | видно: '+(d.sat_visible??0)+' | HDOP: '+d.hdop+' | обновлено '+Math.round(d.age_ms/1000)+' с назад';
-  if(yandexMap) updateYandexPoint(lat,lng);
-  else if(map) updateLeafletPoint(lat,lng);
+  if(map) updateLeafletPoint(lat,lng);
 }catch(e){}
 }
 async function loadFirmwareInfo(){
@@ -950,7 +896,7 @@ async function loadFirmwareInfo(){
  try{
   const r=await fetch('/firmware/info?ts='+Date.now(),{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);
   const d=await r.json();
-  const rows=[['Версия прошивки',d.firmware_version],['Версия приложения',d.app_version],['Дата сборки',d.build_date+' '+d.build_time],['Git commit',d.git_commit],['Проект',d.project],['SHA-256 ELF',d.elf_sha256],['Чип',d.chip_model+' rev.'+d.chip_revision+' / '+d.cores+' ядра'],['Частота CPU',d.cpu_mhz+' МГц'],['Flash',d.flash_size_bytes+' байт; '+d.flash_speed_hz+' Гц; режим '+d.flash_mode],['PSRAM',d.psram_size_bytes+' байт'],['Размер образа',d.image_size_bytes+' байт'],['Раздел приложения',d.partition_label+' @ 0x'+Number(d.partition_address).toString(16)],['Heap свободно / минимум',d.free_heap_bytes+' / '+d.min_free_heap_bytes+' байт'],['Максимальный блок heap',d.largest_heap_block_bytes+' байт'],['Свободно под OTA',d.free_sketch_bytes+' байт'],['MAC Wi-Fi',d.mac],['SDK',d.sdk_version],['Причина последнего сброса',d.reset_reason],['Время после запуска',Math.floor(d.uptime_ms/1000)+' с']];
+  const rows=[['Версия прошивки',d.firmware_version],['Дата сборки',d.build_date+' '+d.build_time],['Git commit',d.git_commit],['Причина последнего сброса',d.reset_reason],['Время после запуска',Math.floor(d.uptime_ms/1000)+' с']];
   out.textContent=rows.map(x=>x[0]+': '+(x[1]===undefined||x[1]===null?'—':x[1])).join('\n');
  }catch(e){out.textContent='Не удалось получить сведения: '+e.message;}
 }
@@ -1967,7 +1913,7 @@ void handleFirmwareInfo() {
     doc["app_version"]=app->version; doc["build_date"]=app->date; doc["build_time"]=app->time;
     doc["project"]=app->project_name; doc["idf_version"]=app->idf_ver;
   }
-  doc["firmware_version"]="1.1.0"; doc["git_commit"]=FIRMWARE_GIT_SHA; doc["elf_sha256"]=hash;
+  doc["firmware_version"]=FIRMWARE_VERSION; doc["git_commit"]=FIRMWARE_GIT_SHA; doc["elf_sha256"]=hash;
   doc["chip_model"]=ESP.getChipModel(); doc["chip_revision"]=ESP.getChipRevision();
   doc["cores"]=ESP.getChipCores(); doc["cpu_mhz"]=ESP.getCpuFreqMHz();
   doc["flash_size_bytes"]=ESP.getFlashChipSize(); doc["flash_speed_hz"]=ESP.getFlashChipSpeed();
@@ -1985,25 +1931,18 @@ void handleFirmwareInfo() {
 void handleFirmwareDownload() {
   const esp_partition_t* part=esp_ota_get_running_partition();
   if(!part){server.send(500,"text/plain","Running application partition not found");return;}
-  esp_partition_pos_t pos={part->address,part->size}; esp_image_metadata_t meta={};
-  if(esp_image_get_metadata(&pos,&meta)!=ESP_OK||meta.image_len==0||meta.image_len>part->size){
-    server.send(500,"text/plain","Cannot determine valid running firmware image size");return;
-  }
-  server.sendHeader("Content-Disposition","attachment; filename=\"esp32-gnss-current.bin\"");
-  server.sendHeader("Cache-Control","no-store"); server.setContentLength(meta.image_len);
-  server.send(200,"application/octet-stream","");
-  WiFiClient client=server.client(); uint8_t buffer[1024]; size_t offset=0;
-  while(offset<meta.image_len&&client.connected()){
-    size_t count=(meta.image_len-offset)>sizeof(buffer)?sizeof(buffer):(meta.image_len-offset);
-    if(esp_partition_read(part,offset,buffer,count)!=ESP_OK)break;
-    size_t sent=0;
-    while(sent<count&&client.connected()){
-      size_t n=client.write(buffer+sent,count-sent); if(n==0){delay(2);continue;} sent+=n;
-    }
-    if(sent!=count)break; offset+=count;
-  }
+  esp_partition_pos_t pos={part->address,part->size};esp_image_metadata_t meta={};
+  if(esp_image_get_metadata(&pos,&meta)!=ESP_OK||meta.image_len==0||meta.image_len>part->size||meta.image_len>0xFFFFFFFFULL){server.send(500,"text/plain","Cannot determine ZIP32 firmware image size");return;}
+  const char entryName[]="firmware.bin";const uint16_t nameLen=sizeof(entryName)-1;uint8_t buffer[1024];uint32_t crc=0xFFFFFFFFUL;size_t offset=0;
+  while(offset<meta.image_len){size_t count=min(sizeof(buffer),(size_t)(meta.image_len-offset));if(esp_partition_read(part,offset,buffer,count)!=ESP_OK){server.send(500,"text/plain","Flash read failed while calculating CRC32");return;}for(size_t i=0;i<count;i++){crc^=buffer[i];for(uint8_t bit=0;bit<8;bit++)crc=(crc>>1)^((crc&1)?0xEDB88320UL:0);}offset+=count;}crc^=0xFFFFFFFFUL;
+  const uint32_t imageSize=(uint32_t)meta.image_len;const uint32_t zipSize=30U+nameLen+imageSize+46U+nameLen+22U;char filename[96];snprintf(filename,sizeof(filename),"ESP32-GNSS-v%s.zip",FIRMWARE_VERSION);
+  server.sendHeader("Content-Disposition",String("attachment; filename=\\\"")+filename+"\\\"");server.sendHeader("Cache-Control","no-store");server.setContentLength(zipSize);server.send(200,"application/zip","");
+  WiFiClient client=server.client();auto put16=[&](uint16_t v){uint8_t q[2]={(uint8_t)v,(uint8_t)(v>>8)};client.write(q,2);};auto put32=[&](uint32_t v){uint8_t q[4]={(uint8_t)v,(uint8_t)(v>>8),(uint8_t)(v>>16),(uint8_t)(v>>24)};client.write(q,4);};
+  put32(0x04034b50);put16(20);put16(0);put16(0);put16(0);put16(0);put32(crc);put32(imageSize);put32(imageSize);put16(nameLen);put16(0);client.write((const uint8_t*)entryName,nameLen);
+  offset=0;while(offset<meta.image_len&&client.connected()){size_t count=min(sizeof(buffer),(size_t)(meta.image_len-offset));if(esp_partition_read(part,offset,buffer,count)!=ESP_OK)return;size_t sent=0;while(sent<count&&client.connected()){size_t n=client.write(buffer+sent,count-sent);if(!n){delay(2);continue;}sent+=n;}if(sent!=count)return;offset+=count;}
+  put32(0x02014b50);put16(20);put16(20);put16(0);put16(0);put16(0);put16(0);put32(crc);put32(imageSize);put32(imageSize);put16(nameLen);put16(0);put16(0);put16(0);put16(0);put32(0);put32(0);client.write((const uint8_t*)entryName,nameLen);
+  put32(0x06054b50);put16(0);put16(0);put16(1);put16(1);put32(46U+nameLen);put32(30U+nameLen+imageSize);put16(0);
 }
-
 void handleFirmwareUploadResult() {
   if(!firmwareUploadOk){
     JsonDocument doc;doc["ok"]=false;doc["error"]=firmwareUploadError.length()?firmwareUploadError:"Firmware upload failed";
@@ -2183,8 +2122,6 @@ void setup() {
   server.on("/maps", HTTP_GET, handleMaps);
   server.on("/maps/info", HTTP_GET, handleMapInfo);
   server.on("/maps/logs", HTTP_GET, handleMbtilesLogs);
-  server.on("/maps/yandex-key", HTTP_GET, handleYandexKeyGet);
-  server.on("/maps/yandex-key", HTTP_POST, handleYandexKeySet);
   server.on("/settings/fix-timeout", HTTP_POST, handleSetFixTimeout);
   server.on("/tiles", HTTP_GET, handleTile);
   for (const char* leafletFile : LEAFLET_FILES) server.on(leafletFile, HTTP_GET, handleLib);

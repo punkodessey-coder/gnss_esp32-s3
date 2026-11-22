@@ -39,12 +39,19 @@ jobs:
           PY
           node --check /tmp/gnss-ui.js
 
+      - name: Set firmware version
+        run: echo "FIRMWARE_VERSION=1.2.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+
       - name: Build firmware
         run: pio run
 
       - name: Prepare firmware artifact
         run: |
-          mkdir -p artifact
+          VERSION="1.2.${GITHUB_RUN_NUMBER}"
+          mkdir -p artifact/package
+          cp .pio/build/esp32s3/firmware.bin artifact/package/firmware.bin
+          printf 'version=%s\\nbuild_date=%s\\ngit_commit=%s\\n' "$VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$GITHUB_SHA" > artifact/package/firmware-info.txt
+          (cd artifact/package && zip -0 "../ESP32-GNSS-v${VERSION}.zip" firmware.bin firmware-info.txt)
           cp .pio/build/esp32s3/firmware.bin artifact/firmware.bin
           if [ -f .pio/build/esp32s3/bootloader.bin ]; then cp .pio/build/esp32s3/bootloader.bin artifact/; fi
           if [ -f .pio/build/esp32s3/partitions.bin ]; then cp .pio/build/esp32s3/partitions.bin artifact/; fi
@@ -52,6 +59,6 @@ jobs:
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: esp32-s3-firmware
+          name: ESP32-GNSS-v1.2.${{ github.run_number }}
           path: artifact/
           if-no-files-found: error
