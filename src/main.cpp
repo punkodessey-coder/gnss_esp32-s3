@@ -541,6 +541,7 @@ String aiJson() {
   doc["learning_samples"] = aiMonitor.samples();
   doc["learning_rejected"] = aiMonitor.learningRejectedSamples();
   doc["learning_allowed"] = aiMonitor.learningAllowed();
+  doc["learning_pause_reason"] = !aiReferenceEnabled ? "" : (!haveFix || !coordinatesAvailable ? "Ожидание FIX: контрольную точку пока нельзя проверить" : (referenceDistance>aiReferenceRadiusM ? "Пауза: координаты вне контрольного радиуса" : ""));
   doc["learning_progress"] = aiMonitor.learningProgress();
   doc["feature_snr_samples"] = aiMonitor.featureSamples(2);
   doc["feature_visible_samples"] = aiMonitor.featureSamples(5);
@@ -1514,7 +1515,7 @@ async function refreshAi(){
     document.getElementById('aiHdopTrend').textContent=Number(d.hdop_trend).toFixed(2);
     document.getElementById('aiSnrTrend').textContent=Number(d.snr_trend).toFixed(1);
     const dist=document.getElementById('aiReferenceDistance');if(dist)dist.textContent=!d.reference_enabled?'Контрольная точка не задана':(d.reference_distance_m>=0?Number(d.reference_distance_m).toFixed(1)+' м (допуск '+Number(d.reference_radius_m).toFixed(0)+' м)': 'Недоступно — нет актуального FIX');
-    const learn=document.getElementById('aiLearningStatus');if(learn)learn.textContent=!d.learning_allowed?'Пауза: позиция вне контрольного радиуса':(d.trained?(d.offline_model_loaded?'Профиль активен · адаптация идёт':'Базовый профиль сформирован'):'Сбор данных · '+Math.min(12,Number(d.learning_progress||0))+'/12');
+    const learn=document.getElementById('aiLearningStatus');if(learn)learn.textContent=!d.learning_allowed?(d.learning_pause_reason||'Обучение приостановлено'): (d.trained?(d.offline_model_loaded?'Профиль активен · адаптация идёт':'Базовый профиль сформирован'):'Сбор данных · '+Math.min(12,Number(d.learning_progress||0))+'/12');
     const counts=document.getElementById('aiLearningCounts');if(counts)counts.textContent=Number(d.learning_samples||0)+' / '+Number(d.learning_rejected||0);
     const feats=document.getElementById('aiFeatureCounts');if(feats)feats.textContent=Number(d.feature_snr_samples||0)+' / '+Number(d.feature_visible_samples||0);
     document.getElementById('aiSituation').textContent=d.situation||'Сбор телеметрии…';
@@ -2806,7 +2807,7 @@ void loop() {
     const float accelMagnitude = imuReady ? sqrtf(ax*ax + ay*ay + az*az) : 0.0f;
     const float gyroMagnitude = imuReady ? sqrtf(gx*gx + gy*gy + gz*gz) : 0.0f;
     const bool positionUpdated = coordinatesAvailable && (millis() - lastCoordinateMs <= 1100);
-    const bool trustedForLearning = !aiReferenceEnabled || !haveFix || !coordinatesAvailable || aiDistanceMeters(aiReferenceLat,aiReferenceLon,lat,lng) <= aiReferenceRadiusM;
+    const bool trustedForLearning = !aiReferenceEnabled || (haveFix && coordinatesAvailable && aiDistanceMeters(aiReferenceLat,aiReferenceLon,lat,lng) <= aiReferenceRadiusM);
     aiMonitor.setLearningAllowed(trustedForLearning);
     aiMonitor.update(haveFix, (float)hdop, satellites, satellitesVisible,
       gsvSnrCount ? avgGsvSnr : NAN, gpsSpeedMps,
