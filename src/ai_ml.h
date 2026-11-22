@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <math.h>
+#include "ai_trained_model.h"
 
 // Lightweight on-device online anomaly model for ESP32-S3.
 // This is a statistical ML baseline, not a trained neural network.
@@ -92,7 +93,23 @@ public:
 
     maxZ_ = 0.0f;
     anomalyCode_ = "normal";
-    for (uint8_t i = 0; i < 6; ++i) {
+    if (GnssTrainedModel::enabled) {
+      for (uint8_t i = 0; i < 6; ++i) {
+        if (!available[i] || !(GnssTrainedModel::featureMask & (1U << i))) continue;
+        const float center = (float)GnssTrainedModel::centerQ[i] / 100.0f;
+        const float scale = fmaxf(0.01f, (float)GnssTrainedModel::scaleQ[i] / 100.0f);
+        const float z = fabsf(features[i] - center) / scale;
+        if (z > maxZ_) {
+          maxZ_ = z;
+          anomalyCode_ = (i == 0) ? "hdop_deviation" :
+            (i == 1) ? "satellite_count_deviation" :
+            (i == 2) ? "signal_level_deviation" :
+            (i == 3) ? "imu_acceleration_deviation" :
+            (i == 4) ? "imu_gyro_deviation" : "visible_satellite_deviation";
+        }
+      }
+    } else {
+      for (uint8_t i = 0; i < 6; ++i) {
       if (!available[i]) continue;
       if (featureSamples_[i] >= 12) {
         const float variance = (featureSamples_[i] > 1) ? m2_[i] / (float)(featureSamples_[i] - 1) : 0.0f;
@@ -108,13 +125,14 @@ public:
         }
       }
     }
+    }
 
     // A baseline can be learned from signal/visibility or IMU alone, even
     // when the receiver has not acquired a position fix.
     const bool baselineReady = featureSamples_[2] >= 12 || featureSamples_[5] >= 12 ||
       (featureSamples_[3] >= 12 && featureSamples_[4] >= 12) ||
       (featureSamples_[0] >= 12 && featureSamples_[1] >= 12);
-    anomaly_ = baselineReady && maxZ_ >= 3.5f;
+    anomaly_ = (GnssTrainedModel::enabled || baselineReady) && maxZ_ >= (GnssTrainedModel::enabled ? (float)GnssTrainedModel::thresholdQ / 100.0f : 3.5f);
     if (!anomaly_) {
       ++samples_;
       for (uint8_t i = 0; i < 6; ++i) {
@@ -127,7 +145,7 @@ public:
       }
     }
 
-    const bool baselineNowReady = featureSamples_[2] >= 12 || featureSamples_[5] >= 12 ||
+    const bool baselineNowReady = GnssTrainedModel::enabled || featureSamples_[2] >= 12 || featureSamples_[5] >= 12 ||
       (featureSamples_[3] >= 12 && featureSamples_[4] >= 12) ||
       (featureSamples_[0] >= 12 && featureSamples_[1] >= 12);
     if (!baselineNowReady) {
@@ -162,7 +180,9 @@ public:
   const char* motion() const { return motion_; }
   float hdopTrend() const { return hdopTrend_; }
   float cnoTrend() const { return cnoTrend_; }
-  bool trained() const { return featureSamples_[2] >= 12 || featureSamples_[5] >= 12 || (featureSamples_[3] >= 12 && featureSamples_[4] >= 12) || (featureSamples_[0] >= 12 && featureSamples_[1] >= 12); }
+  bool offlineModelLoaded() const { return GnssTrainedModel::enabled; }
+  uint32_t trainingSamples() const { return GnssTrainedModel::trainingSamples; }
+  bool trained() const { return GnssTrainedModel::enabled || featureSamples_[2] >= 12 || featureSamples_[5] >= 12 || (featureSamples_[3] >= 12 && featureSamples_[4] >= 12) || (featureSamples_[0] >= 12 && featureSamples_[1] >= 12); }
 
 private:
   uint32_t samples_ = 0;
