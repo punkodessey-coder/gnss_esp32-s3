@@ -541,7 +541,7 @@ String aiJson() {
   doc["learning_samples"] = aiMonitor.samples();
   doc["learning_rejected"] = aiMonitor.learningRejectedSamples();
   doc["learning_allowed"] = aiMonitor.learningAllowed();
-  doc["learning_pause_reason"] = !aiReferenceEnabled ? "" : (!haveFix || !coordinatesAvailable ? "Ожидание FIX: контрольную точку пока нельзя проверить" : (referenceDistance>aiReferenceRadiusM ? "Пауза: координаты вне контрольного радиуса" : ""));
+  doc["learning_pause_reason"] = !aiReferenceEnabled ? "" : (!haveFix || !coordinatesAvailable ? "Ожидание FIX: контрольную точку пока нельзя проверить" : (aiDistanceMeters(aiReferenceLat,aiReferenceLon,lat,lng)>aiReferenceRadiusM ? "Пауза: координаты вне контрольного радиуса" : ""));
   doc["learning_progress"] = aiMonitor.learningProgress();
   doc["feature_snr_samples"] = aiMonitor.featureSamples(2);
   doc["feature_visible_samples"] = aiMonitor.featureSamples(5);
