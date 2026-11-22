@@ -776,7 +776,6 @@ async function selectMap(value){
   const token=++mapLoadToken;currentMap=value;setMapStatus('Подготовка карты…','loading');
   if(tileLayer && map){map.removeLayer(tileLayer);tileLayer=null;}
   if(map){map.remove();map=null;gpsMarker=null;}
-  if(map){map.remove();map=null;gpsMarker=null;}
   setMapStatus('Загружаю библиотеку карты…','loading');
   if(!await ensureLeaflet()||token!==mapLoadToken){if(token===mapLoadToken)initMap();return;}
   if(!initMap())return;
@@ -888,7 +887,7 @@ async function loadFirmwareInfo(){
  try{
   const r=await fetch('/firmware/info?ts='+Date.now(),{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);
   const d=await r.json();
-  const rows=[['Версия прошивки',d.firmware_version],['Дата сборки',d.build_date+' '+d.build_time],['Git commit',d.git_commit],['Причина последнего сброса',d.reset_reason],['Время после запуска',Math.floor(d.uptime_ms/1000)+' с']];
+  const rows=[['Версия прошивки',d.firmware_version],['Дата сборки',d.build_date+' '+d.build_time],['Git commit',d.git_commit],['SHA-256 ELF',d.elf_sha256],['Чип',d.chip_model+' rev.'+d.chip_revision+' / '+d.cores+' ядра'],['Частота CPU',d.cpu_mhz+' МГц'],['Причина последнего сброса',d.reset_reason],['Время после запуска',Math.floor(d.uptime_ms/1000)+' с']];
   out.textContent=rows.map(x=>x[0]+': '+(x[1]===undefined||x[1]===null?'—':x[1])).join('\n');
  }catch(e){out.textContent='Не удалось получить сведения: '+e.message;}
 }
