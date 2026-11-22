@@ -111,6 +111,10 @@ static String mbtilesOpenName;
 static int mbtilesMinZoom = -1, mbtilesMaxZoom = -1;
 static uint64_t mbtilesFileSize = 0;
 bool aiLoggingEnabled = false;
+bool situationLoggingEnabled = false;
+uint16_t reportIntervalSeconds = 300;
+unsigned long lastSituationLogMs = 0;
+unsigned long lastBleMessageMs = 0;
 unsigned long lastFixMs = 0;
 unsigned long lastGgaMs = 0;
 unsigned long lastGsvMs = 0;
@@ -450,16 +454,44 @@ String aiJson() {
   doc["hdop"] = hdop;
   doc["accel_magnitude_mps2"] = imuReady ? sqrtf(ax*ax + ay*ay + az*az) : 0.0f;
   doc["linear_accel_estimate_mps2"] = imuReady ? fabsf(sqrtf(ax*ax + ay*ay + az*az) - 9.80665f) : 0.0f;
-  String situation;
-  if (!haveFix) situation = "Нет актуального GNSS-фикса. Проверьте антенну, обзор неба и поток NMEA.";
-  else if (aiMonitor.mismatch()) situation = "Внимание: скорость по GNSS не согласуется с перемещением координат. Это повод проверить качество приёма и телеметрию, а не доказательство подмены сигнала.";
-  else if (aiMonitor.anomaly()) situation = "Обнаружено статистическое отклонение (" + String(aiMonitor.anomalyCode()) + "). Продолжается наблюдение за качеством GNSS.";
-  else if (satellites < 4 || hdop > 3.0) situation = "Фикс есть, но геометрия/количество спутников ограничивают точность. Спутников в решении: " + String(satellites) + ", HDOP: " + String(hdop, 1) + ".";
-  else if (String(aiMonitor.risk()) == "degrading") situation = "Качество спутникового сигнала ухудшается по тренду HDOP/SNR. Наблюдайте за изменением показателей.";
-  else if (!aiMonitor.trained()) situation = "Фикс получен. Модель собирает базовый профиль GNSS; для первичной оценки нужно не менее 12 интервалов.";
-  else situation = "GNSS фикс устойчив по текущим метрикам. Спутников в решении: " + String(satellites) + ", HDOP: " + String(hdop, 1) + ".";
-  situation += imuReady ? " IMU: модуль ускорения " + String(sqrtf(ax*ax + ay*ay + az*az), 2) + " м/с²; около 9,81 м/с² в покое — это гравитация." : " IMU не доступен.";
+  String situation, verdict, reasons;
+  if (!haveFix) {
+    verdict = "НЕТ АКТУАЛЬНОГО GNSS-ФИКСА";
+    situation = "Приёмник сейчас не выдаёт актуальное навигационное решение.";
+    reasons = "Проверка спуффинга ограничена: нет действующего фикса и координат для проверки целостности.";
+  } else if (aiMonitor.mismatch()) {
+    verdict = "ОБНАРУЖЕН ПОДОЗРИТЕЛЬНЫЙ ПРИЗНАК";
+    situation = "Скорость, сообщаемая GNSS, не согласуется с перемещением координат.";
+    reasons = "Это может указывать на нарушение целостности навигационных данных, но само по себе не доказывает спуффинг.";
+  } else if (aiMonitor.anomaly()) {
+    verdict = "ОБНАРУЖЕНО СТАТИСТИЧЕСКОЕ ОТКЛОНЕНИЕ";
+    situation = "Один или несколько параметров GNSS заметно отличаются от накопленного профиля.";
+    reasons = "Код отклонения: " + String(aiMonitor.anomalyCode()) + ". Требуется наблюдение за динамикой показателей.";
+  } else if (satellites < 4 || hdop > 3.0f) {
+    verdict = "НЕДОСТАТОЧНОЕ КАЧЕСТВО GNSS";
+    situation = "Фикс есть, но геометрия спутников или точность решения ограничивают надёжность оценки.";
+    reasons = "Спутников в решении: " + String(satellites) + "; HDOP: " + String(hdop, 2) + ".";
+  } else if (String(aiMonitor.risk()) == "degrading") {
+    verdict = "КАЧЕСТВО GNSS УХУДШАЕТСЯ";
+    situation = "Наблюдается ухудшение тренда HDOP/SNR.";
+    reasons = "HDOP trend: " + String(aiMonitor.hdopTrend(), 2) + "; SNR trend: " + String(aiMonitor.cnoTrend(), 1) + ".";
+  } else if (!aiMonitor.trained()) {
+    verdict = "НАКОПЛЕНИЕ БАЗОВОГО ПРОФИЛЯ";
+    situation = "Фикс получен. Система собирает статистику для сравнения с обычным поведением приёмника.";
+    reasons = "Пока недостаточно обучающих интервалов для уверенного статистического сравнения.";
+  } else {
+    verdict = "ЯВНЫХ ОТКЛОНЕНИЙ НЕ ОБНАРУЖЕНО";
+    situation = "По доступным GNSS-показателям сейчас не выявлено проверяемых признаков нарушения целостности.";
+    reasons = "Фикс актуален; спутников в решении: " + String(satellites) + "; видно по GSV: " + String(satellitesVisible) + "; HDOP: " + String(hdop, 2) + "; средний GSV SNR: " + String(avgGsvSnr, 1) + ". Проверка скорости и перемещения не сработала. Это не гарантирует отсутствие спуффинга.";
+  }
+  if (imuReady) reasons += " IMU доступен, но акселерометр и гироскоп не откалиброваны и исключены из оценки GNSS-целостности.";
+  else reasons += " IMU недоступен и не участвует в оценке.";
   doc["situation"] = situation;
+  doc["verdict"] = verdict;
+  doc["reasons"] = reasons;
+  doc["imu_used_for_integrity"] = false;
+  doc["report_interval_seconds"] = reportIntervalSeconds;
+  doc["situation_logging"] = situationLoggingEnabled;
   doc["satellites_used"] = satellites;
   doc["satellites_visible"] = satellitesVisible;
   doc["gps_speed_mps"] = gps.speed.isValid() ? gps.speed.mps() : 0.0f;
@@ -650,7 +682,7 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <div class="card">
 <h2>AI / ML — мониторинг навигации</h2>
 <div id="aiStatus" class="small">Ожидание данных…</div>
-<div class="card" style="background:#152235"><h3>Текущая ситуация</h3><div id="aiSituation" class="coords">Сбор телеметрии…</div></div>
+<div class="card" style="background:#152235"><h3>Заключение по текущей обстановке</h3><strong id="aiVerdict">Ожидание данных…</strong><div id="aiSituation" class="coords">Сбор телеметрии…</div><div id="aiReasons" class="small"></div></div>
 <div class="metric"><span>Соответствие базовому профилю</span><strong id="aiScore">—</strong></div>
 <div class="metric"><span>Состояние модели</span><strong id="aiRisk">—</strong></div>
 <div class="metric"><span>Обучающие интервалы</span><strong id="aiSamples">0</strong></div>
@@ -662,12 +694,8 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <div class="metric"><span>Тренд SNR</span><strong id="aiSnrTrend">—</strong></div>
 <pre id="aiDetails" class="coords">Модель собирает исходный профиль приёма…</pre>
 <button class="gray" onclick="resetAiModel()">Сбросить профиль модели</button>
-<div class="ubx-actions">
-<button onclick="setAiLogging(true)">Начать запись CSV</button>
-<button class="gray" onclick="setAiLogging(false)">Остановить запись</button>
-<a href="/ai/dataset" style="color:#8ab4ff;padding:10px">Скачать CSV</a>
-</div>
-<div id="aiLogStatus" class="small">Запись набора данных выключена</div>
+<div class="card"><h3>Журнал обстановки и интервал сообщений</h3><label for="reportInterval">Интервал (10 секунд — 30 минут)</label><select id="reportInterval"><option value="10">10 секунд</option><option value="30">30 секунд</option><option value="60">1 минута</option><option value="300" selected>5 минут — рекомендуется</option><option value="600">10 минут</option><option value="900">15 минут</option><option value="1800">30 минут</option></select><button onclick="saveReportInterval()">Применить интервал</button><div class="ubx-actions"><button onclick="setSituationLogging(true)">Начать журнал</button><button class="gray" onclick="setSituationLogging(false)">Остановить журнал</button><a href="/ai/situation-log" style="color:#8ab4ff;padding:10px">Скачать журнал</a></div><div id="situationLogStatus" class="small">Журнал остановлен</div></div>
+<div class="ubx-actions"><button onclick="setAiLogging(true)">Начать подробную запись CSV</button><button class="gray" onclick="setAiLogging(false)">Остановить запись CSV</button><a href="/ai/dataset" style="color:#8ab4ff;padding:10px">Скачать CSV</a></div><div id="aiLogStatus" class="small">Запись набора данных выключена</div>
 <div class="small">Локальная статистическая ML-модель с онлайн-обучением. Отклонения не доказывают глушение или spoofing. GSV SNR — приближённый уровень сигнала, не калиброванный C/N₀.</div>
 </div>
 </div>
@@ -1264,6 +1292,10 @@ async function refreshAi(){
     document.getElementById('aiHdopTrend').textContent=Number(d.hdop_trend).toFixed(2);
     document.getElementById('aiSnrTrend').textContent=Number(d.snr_trend).toFixed(1);
     document.getElementById('aiSituation').textContent=d.situation||'Сбор телеметрии…';
+    document.getElementById('aiVerdict').textContent=d.verdict||'Недостаточно данных для заключения';
+    document.getElementById('aiReasons').textContent=d.reasons||'';
+    const interval=document.getElementById('reportInterval'); if(interval && !interval.dataset.loaded){interval.value=String(d.report_interval_seconds||300);interval.dataset.loaded='1';}
+    document.getElementById('situationLogStatus').textContent=d.situation_logging?'Журнал ведётся':'Журнал остановлен';
     document.getElementById('aiDetails').textContent='Модель: '+d.model_type+
       '\nКод отклонения: '+d.anomaly_code+
       '\nМаксимальное отклонение: '+Number(d.max_z_score).toFixed(2)+' σ'+
@@ -1280,6 +1312,8 @@ async function setAiLogging(enabled){
     document.getElementById('aiLogStatus').textContent=d.enabled?'Запись включена: /ai_dataset.csv':'Запись остановлена';
   }catch(e){document.getElementById('aiLogStatus').textContent='Ошибка записи CSV: '+e.message;}
 }
+async function saveReportInterval(){try{const v=Number(document.getElementById('reportInterval').value);const r=await fetch('/ai/report-interval?seconds='+v,{method:'POST'});const d=await r.json();if(!r.ok)throw new Error(d.error||'Ошибка');document.getElementById('situationLogStatus').textContent='Интервал установлен: '+d.seconds+' с';}catch(e){document.getElementById('situationLogStatus').textContent='Ошибка интервала: '+e.message;}}
+async function setSituationLogging(enabled){try{const r=await fetch('/ai/situation-logging?enabled='+(enabled?'1':'0'),{method:'POST'});const d=await r.json();if(!r.ok)throw new Error(d.error||'Ошибка');document.getElementById('situationLogStatus').textContent=d.enabled?'Журнал включён':'Журнал остановлен';}catch(e){document.getElementById('situationLogStatus').textContent='Ошибка журнала: '+e.message;}}
 async function resetAiModel(){
   try{const r=await fetch('/ai/reset',{method:'POST'});if(!r.ok)throw new Error('HTTP '+r.status);refreshAi();}
   catch(e){document.getElementById('aiStatus').textContent='Ошибка сброса: '+e.message;}
@@ -1487,6 +1521,49 @@ void handleAiDataset() {
   if (!file) { server.send(500, "text/plain", "Не удалось открыть CSV"); return; }
   server.sendHeader("Content-Disposition", "attachment; filename=ai_dataset.csv");
   server.streamFile(file, "text/csv");
+  file.close();
+}
+void handleSituationLogging() {
+  const bool enabled = server.arg("enabled") == "1";
+  if (enabled && !sdReady) { server.send(503, "application/json", R"({"enabled":false,"error":"microSD недоступна"})"); return; }
+  situationLoggingEnabled = enabled;
+  if (enabled) lastSituationLogMs = 0;
+  JsonDocument doc; doc["enabled"] = enabled; String out; serializeJson(doc, out);
+  server.send(200, "application/json", out);
+}
+void handleReportInterval() {
+  int seconds = server.arg("seconds").toInt();
+  if (seconds < 10 || seconds > 1800) { server.send(400, "application/json", R"({"error":"Интервал должен быть от 10 до 1800 секунд"})"); return; }
+  reportIntervalSeconds = (uint16_t)seconds;
+  preferences.putUShort("report_sec", reportIntervalSeconds);
+  JsonDocument doc; doc["seconds"] = reportIntervalSeconds; String out; serializeJson(doc, out);
+  server.send(200, "application/json", out);
+}
+void handleSituationLogDownload() {
+  if (!sdReady || !SD_MMC.exists("/situation_log.csv")) { server.send(404, "text/plain; charset=utf-8", "Журнал пока не создан"); return; }
+  File file = SD_MMC.open("/situation_log.csv", FILE_READ);
+  if (!file) { server.send(500, "text/plain", "Не удалось открыть журнал"); return; }
+  server.sendHeader("Content-Disposition", "attachment; filename=situation_log.csv");
+  server.streamFile(file, "text/csv"); file.close();
+}
+void writeSituationLog() {
+  if (!situationLoggingEnabled || !sdReady) return;
+  const unsigned long now = millis();
+  if (lastSituationLogMs && now - lastSituationLogMs < (unsigned long)reportIntervalSeconds * 1000UL) return;
+  lastSituationLogMs = now;
+  File file = SD_MMC.open("/situation_log.csv", FILE_APPEND); if (!file) return;
+  if (file.size() == 0) file.println("uptime_ms,fix,sat_used,sat_visible,hdop,gsv_snr_avg,gps_speed_mps,anomaly,mismatch,verdict,reasons");
+  String verdict = haveFix ? "Оценка GNSS" : "Нет актуального фикса";
+  String reasons;
+  if (!haveFix) reasons = "Нет актуального фикса; оценка ограничена";
+  else if (aiMonitor.mismatch()) { verdict = "Подозрительный признак целостности"; reasons = "Скорость не согласуется с перемещением координат"; }
+  else if (aiMonitor.anomaly()) { verdict = "Статистическое отклонение"; reasons = String("Отклонение: ") + aiMonitor.anomalyCode(); }
+  else if (satellites < 4 || hdop > 3.0f) { verdict = "Недостаточное качество GNSS"; reasons = "Мало спутников или высокий HDOP"; }
+  else if (String(aiMonitor.risk()) == "degrading") { verdict = "Качество GNSS ухудшается"; reasons = "Ухудшение тренда HDOP/SNR"; }
+  else if (!aiMonitor.trained()) { verdict = "Накопление профиля"; reasons = "Недостаточно интервалов для статистики"; }
+  else { verdict = "Явных отклонений не выявлено"; reasons = "Фикс актуален; статистика GNSS без выраженных отклонений; проверка скорости/перемещения не сработала. Это не исключает спуффинг."; }
+  verdict.replace(',', ';'); reasons.replace(',', ';');
+  file.printf("%lu,%u,%d,%d,%.2f,%.2f,%.2f,%u,%u,\"%s\",\"%s\"\n", now, haveFix?1U:0U, satellites, satellitesVisible, hdop, gsvSnrCount?avgGsvSnr:NAN, gps.speed.isValid()?gps.speed.mps():NAN, aiMonitor.anomaly()?1U:0U, aiMonitor.mismatch()?1U:0U, verdict.c_str(), reasons.c_str());
   file.close();
 }
 void handleMaps() {
@@ -2018,6 +2095,8 @@ void setup() {
 
   preferences.begin("imu", false);
   if (!preferences.isKey("points")) preferences.putString("points", "[]");
+  reportIntervalSeconds = preferences.getUShort("report_sec", 300);
+  if (reportIntervalSeconds < 10 || reportIntervalSeconds > 1800) reportIntervalSeconds = 300;
   fixTimeoutSeconds = preferences.getUChar("fix_timeout", 7);
   if (fixTimeoutSeconds < 1 || fixTimeoutSeconds > 60) fixTimeoutSeconds = 7;
   gyroOffsetX = preferences.getFloat("gx", 0);
@@ -2075,6 +2154,9 @@ void setup() {
   server.on("/ai/status", HTTP_GET, handleAiStatus);
   server.on("/ai/reset", HTTP_POST, handleAiReset);
   server.on("/ai/logging", HTTP_POST, handleAiLogging);
+  server.on("/ai/situation-logging", HTTP_POST, handleSituationLogging);
+  server.on("/ai/report-interval", HTTP_POST, handleReportInterval);
+  server.on("/ai/situation-log", HTTP_GET, handleSituationLogDownload);
   server.on("/ai/dataset", HTTP_GET, handleAiDataset);
   server.on("/uart", HTTP_GET, handleUart);
   server.on("/maps", HTTP_GET, handleMaps);
@@ -2265,14 +2347,15 @@ void loop() {
     const float gyroMagnitude = imuReady ? sqrtf(gx*gx + gy*gy + gz*gz) : 0.0f;
     aiMonitor.update(haveFix, (float)hdop, satellites,
       gsvSnrCount ? avgGsvSnr : NAN, gpsSpeedMps,
-      accelMagnitude, gyroMagnitude, imuReady, lat, lng,
+      accelMagnitude, gyroMagnitude, false, lat, lng,
       gps.location.isUpdated(), millis());
     logAiDatasetRow();
+    writeSituationLog();
   }
 
   static unsigned long lastBle = 0;
-  if (bleConnected && millis() - lastBle > 1000) {
-    lastBle = millis();
+  if (bleConnected && millis() - lastBleMessageMs >= (unsigned long)reportIntervalSeconds * 1000UL) {
+    lastBleMessageMs = millis();
 
     String payload = coordsJson();
     payload += "|";
