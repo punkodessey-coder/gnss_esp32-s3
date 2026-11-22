@@ -9,7 +9,7 @@ class GnssAiMonitor {
 public:
   void reset() {
     samples_ = 0;
-    for (uint8_t i = 0; i < 5; ++i) {
+    for (uint8_t i = 0; i < 6; ++i) {
       featureSamples_[i] = 0;
       mean_[i] = 0.0f;
       m2_[i] = 0.0f;
@@ -31,7 +31,7 @@ public:
     cnoTrend_ = 0.0f;
   }
 
-  void update(bool fix, float hdop, int used, float avgCno,
+  void update(bool fix, float hdop, int used, int visible, float avgCno,
               float gpsSpeedMps, float accelMagnitude, float gyroMagnitude,
               bool imuAvailable, double lat, double lon, bool positionUpdated, uint32_t nowMs) {
     if (nowMs - lastUpdateMs_ < 900) return;
@@ -69,23 +69,31 @@ public:
       mismatch_ = false;
     }
 
-    if (!fix || !isfinite(hdop) || hdop <= 0.0f || used <= 0) {
+    // The monitor must keep learning even without a valid navigation fix.
+    // HDOP/used-satellite and displacement checks require FIX; signal/visibility
+    // and IMU features remain useful without it.
+    const bool hdopAvailable = fix && isfinite(hdop) && hdop > 0.0f;
+    const bool usedAvailable = fix && used > 0;
+    const bool cnoAvailable = isfinite(avgCno) && avgCno > 0.0f;
+    const bool visibleAvailable = visible > 0;
+    const bool accelAvailable = imuAvailable && isfinite(dynamicAccel);
+    const bool gyroAvailable = imuAvailable && isfinite(gyroMagnitude);
+    float features[6] = { hdop, (float)used, avgCno, dynamicAccel, gyroMagnitude, (float)visible };
+    bool available[6] = { hdopAvailable, usedAvailable, cnoAvailable, accelAvailable, gyroAvailable, visibleAvailable };
+    uint8_t availableCount = 0;
+    for (uint8_t i = 0; i < 6; ++i) if (available[i]) ++availableCount;
+    if (!availableCount) {
       risk_ = fix ? "limited_data" : "no_fix";
       qualityScore_ = -1;
       anomaly_ = false;
-      anomalyCode_ = "no_valid_fix";
+      anomalyCode_ = "insufficient_measurements";
       return;
     }
 
-    // Feature vector: HDOP, satellites used, average GSV SNR/CN0 proxy.
-    // NMEA GSV SNR is not identical to calibrated receiver C/N0 telemetry.
-    const bool cnoAvailable = isfinite(avgCno) && avgCno > 0.0f;
-    float features[5] = { hdop, (float)used, avgCno, dynamicAccel, gyroMagnitude };
-
     maxZ_ = 0.0f;
     anomalyCode_ = "normal";
-    for (uint8_t i = 0; i < 5; ++i) {
-      if ((i == 2 && !cnoAvailable) || (i >= 3 && !imuAvailable)) continue;
+    for (uint8_t i = 0; i < 6; ++i) {
+      if (!available[i]) continue;
       if (featureSamples_[i] >= 12) {
         const float variance = (featureSamples_[i] > 1) ? m2_[i] / (float)(featureSamples_[i] - 1) : 0.0f;
         const float sigma = sqrtf(fmaxf(variance, 0.04f));
@@ -95,17 +103,22 @@ public:
           anomalyCode_ = (i == 0) ? "hdop_deviation" :
             (i == 1) ? "satellite_count_deviation" :
             (i == 2) ? "signal_level_deviation" :
-            (i == 3) ? "imu_acceleration_deviation" : "imu_gyro_deviation";
+            (i == 3) ? "imu_acceleration_deviation" :
+            (i == 4) ? "imu_gyro_deviation" : "visible_satellite_deviation";
         }
       }
     }
 
-    const bool baselineReady = featureSamples_[0] >= 12 && featureSamples_[1] >= 12;
+    // A baseline can be learned from signal/visibility or IMU alone, even
+    // when the receiver has not acquired a position fix.
+    const bool baselineReady = featureSamples_[2] >= 12 || featureSamples_[5] >= 12 ||
+      (featureSamples_[3] >= 12 && featureSamples_[4] >= 12) ||
+      (featureSamples_[0] >= 12 && featureSamples_[1] >= 12);
     anomaly_ = baselineReady && maxZ_ >= 3.5f;
     if (!anomaly_) {
       ++samples_;
-      for (uint8_t i = 0; i < 5; ++i) {
-        if ((i == 2 && !cnoAvailable) || (i >= 3 && !imuAvailable)) continue;
+      for (uint8_t i = 0; i < 6; ++i) {
+        if (!available[i]) continue;
         ++featureSamples_[i];
         const float delta = features[i] - mean_[i];
         mean_[i] += delta / (float)featureSamples_[i];
@@ -114,22 +127,25 @@ public:
       }
     }
 
-    if (!baselineReady) {
+    const bool baselineNowReady = featureSamples_[2] >= 12 || featureSamples_[5] >= 12 ||
+      (featureSamples_[3] >= 12 && featureSamples_[4] >= 12) ||
+      (featureSamples_[0] >= 12 && featureSamples_[1] >= 12);
+    if (!baselineNowReady) {
       qualityScore_ = -1;
-      risk_ = "learning";
+      risk_ = fix ? "learning" : "no_fix";
     } else {
       const float penalty = fminf(100.0f, maxZ_ * 18.0f);
       qualityScore_ = (int)lroundf(fmaxf(0.0f, 100.0f - penalty));
-      risk_ = anomaly_ ? "anomaly" : "normal";
+      risk_ = anomaly_ ? "anomaly" : (fix ? "normal" : "no_fix");
     }
 
-    if (isfinite(last_[0])) hdopTrend_ = hdop - last_[0];
+    if (hdopAvailable && isfinite(last_[0])) hdopTrend_ = hdop - last_[0];
     if (cnoAvailable && isfinite(last_[2])) cnoTrend_ = avgCno - last_[2];
-    last_[0] = hdop;
+    if (hdopAvailable) last_[0] = hdop;
     last_[1] = (float)used;
     if (cnoAvailable) last_[2] = avgCno;
 
-    if (hdopTrend_ > 0.35f && (!cnoAvailable || cnoTrend_ < -2.5f)) {
+    if (fix && hdopTrend_ > 0.35f && (!cnoAvailable || cnoTrend_ < -2.5f)) {
       risk_ = "degrading";
     }
     if (mismatch_) risk_ = "integrity_warning";
@@ -146,13 +162,13 @@ public:
   const char* motion() const { return motion_; }
   float hdopTrend() const { return hdopTrend_; }
   float cnoTrend() const { return cnoTrend_; }
-  bool trained() const { return featureSamples_[0] >= 12 && featureSamples_[1] >= 12; }
+  bool trained() const { return featureSamples_[2] >= 12 || featureSamples_[5] >= 12 || (featureSamples_[3] >= 12 && featureSamples_[4] >= 12) || (featureSamples_[0] >= 12 && featureSamples_[1] >= 12); }
 
 private:
   uint32_t samples_ = 0;
-  uint32_t featureSamples_[5] = {0, 0, 0, 0, 0};
-  float mean_[5] = {0, 0, 0, 0, 0};
-  float m2_[5] = {0, 0, 0, 0, 0};
+  uint32_t featureSamples_[6] = {0, 0, 0, 0, 0, 0};
+  float mean_[6] = {0, 0, 0, 0, 0, 0};
+  float m2_[6] = {0, 0, 0, 0, 0, 0};
   float last_[3] = {NAN, NAN, NAN};
   int qualityScore_ = -1;
   float maxZ_ = 0.0f;
