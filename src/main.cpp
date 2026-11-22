@@ -524,6 +524,9 @@ String aiJson() {
   doc["model"] = "online-statistical-v1";
   doc["model_type"] = "Welford online anomaly detector";
   doc["trained"] = aiMonitor.trained();
+  doc["offline_model_loaded"] = aiMonitor.offlineModelLoaded();
+  doc["offline_model_training_rows"] = aiMonitor.trainingSamples();
+  doc["model_training_mode"] = aiMonitor.offlineModelLoaded() ? "offline_robust_median_mad" : "online_welford_ram";
   doc["samples"] = aiMonitor.samples();
   doc["quality_score"] = aiMonitor.qualityScore();
   doc["risk"] = aiMonitor.risk();
