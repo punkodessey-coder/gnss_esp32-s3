@@ -162,7 +162,8 @@ public:
       (featureSamples_[3] >= 12 && featureSamples_[4] >= 12) ||
       (featureSamples_[0] >= 12 && featureSamples_[1] >= 12);
     anomaly_ = (profileEnabled_ || baselineReady) && maxZ_ >= (profileEnabled_ ? profileThreshold_ : 3.5f);
-    if (!anomaly_ && learningAllowed_) {
+    const bool adaptiveNormalProfile = profileEnabled_ && strcmp(profileRole_, "normal_baseline") == 0;
+    if (learningAllowed_ && (!anomaly_ || (adaptiveNormalProfile && maxZ_ < profileThreshold_ * 2.0f))) {
       ++samples_;
       for (uint8_t i = 0; i < 6; ++i) {
         if (!available[i]) continue;
@@ -171,6 +172,11 @@ public:
         mean_[i] += delta / (float)featureSamples_[i];
         const float delta2 = features[i] - mean_[i];
         m2_[i] += delta * delta2;
+        if (adaptiveNormalProfile && featureSamples_[i] >= 12) {
+          const float variance = m2_[i] / (float)(featureSamples_[i] - 1);
+          profileCenter_[i] = mean_[i];
+          profileScale_[i] = fmaxf(0.05f, sqrtf(fmaxf(variance, 0.0025f)));
+        }
       }
     }
 
