@@ -36,7 +36,7 @@ public:
   float profileScale(uint8_t i) const{return i<6?profileScale_[i]:1;}
   float profileThreshold() const{return profileThreshold_;}
   const char* profileRole() const{return profileRole_;}
-  void setLearningAllowed(bool allowed) { learningAllowed_ = allowed; if(!allowed) ++learningRejected_; }
+  void setLearningAllowed(bool allowed) { learningAllowed_ = allowed; }
   bool learningAllowed() const { return learningAllowed_; }
   uint32_t learningRejectedSamples() const { return learningRejected_; }
   uint32_t learningProgress() const { uint32_t n=0; for(uint8_t i=0;i<6;i++) if(featureSamples_[i]>n)n=featureSamples_[i]; return n; }
@@ -116,6 +116,7 @@ public:
     bool available[6] = { hdopAvailable, usedAvailable, cnoAvailable, accelAvailable, gyroAvailable, visibleAvailable };
     uint8_t availableCount = 0;
     for (uint8_t i = 0; i < 6; ++i) if (available[i]) ++availableCount;
+    if (!learningAllowed_) ++learningRejected_;
     if (!availableCount) {
       risk_ = fix ? "limited_data" : "no_fix";
       qualityScore_ = -1;
