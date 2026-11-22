@@ -2786,6 +2786,8 @@ void loop() {
     const float accelMagnitude = imuReady ? sqrtf(ax*ax + ay*ay + az*az) : 0.0f;
     const float gyroMagnitude = imuReady ? sqrtf(gx*gx + gy*gy + gz*gz) : 0.0f;
     const bool positionUpdated = coordinatesAvailable && (millis() - lastCoordinateMs <= 1100);
+    const bool trustedForLearning = !aiReferenceEnabled || (haveFix && coordinatesAvailable && aiDistanceMeters(aiReferenceLat,aiReferenceLon,lat,lng) <= aiReferenceRadiusM);
+    aiMonitor.setLearningAllowed(trustedForLearning);
     aiMonitor.update(haveFix, (float)hdop, satellites, satellitesVisible,
       gsvSnrCount ? avgGsvSnr : NAN, gpsSpeedMps,
       accelMagnitude, gyroMagnitude, imuReady, lat, lng,
