@@ -91,7 +91,6 @@ uint32_t lastCoordinateMs = 0;
 String coordinateSource = "";
 int timezoneOffsetMinutes = 0;
 int16_t wifiScanStatus = WIFI_SCAN_FAILED;
-bool nmeaInvalidPosConfigured = false;
 double lat = 0.0;
 double lng = 0.0;
 double altitude = 0.0;
@@ -339,19 +338,7 @@ void processUbxByte(uint8_t c) {
     if(a==ubxFrame[ubxFramePos-2]&&b==ubxFrame[ubxFramePos-1]){
       lastUbxFrameHex=bytesToHex(ubxFrame,ubxFramePos);
       uint8_t cls=ubxFrame[2],id=ubxFrame[3];
-      if (cls == 0x06 && id == 0x17 && (ubxFrameLength == 4 || ubxFrameLength == 12)) {
-        uint8_t cfgNmea[12] = {};
-        for (size_t i = 0; i < ubxFrameLength; ++i) cfgNmea[i] = ubxFrame[6 + i];
-        if ((cfgNmea[0] & 0x03) != 0x03) {
-          // u-blox CFG-NMEA filter bits 0/1: output positions even when the fix is invalid.
-          cfgNmea[0] |= 0x03;
-          sendUbx(0x06, 0x17, cfgNmea, ubxFrameLength);
-          ubxLastEvent = "CFG-NMEA: включён вывод координат при невалидном фиксе";
-        } else {
-          ubxLastEvent = "CFG-NMEA: вывод координат при невалидном фиксе уже включён";
-        }
-        nmeaInvalidPosConfigured = true;
-      } else if(cls==0x05&&(id==0x01||id==0x00))ubxLastEvent=(id==1?"UBX ACK":"UBX NAK");
+      if(cls==0x05&&(id==0x01||id==0x00))ubxLastEvent=(id==1?"UBX ACK":"UBX NAK");
       else ubxLastEvent="Ответ UBX "+String(cls,HEX)+":"+String(id,HEX);
     }
     ubxFramePos=0;ubxFrameLength=0;
@@ -378,7 +365,7 @@ bool parseNmeaCoordinate(const String& raw, const String& hemisphere, bool latit
   const int degrees = (int)(packed / 100.0);
   const double minutes = packed - degrees * 100.0;
   const int maxDegrees = latitude ? 90 : 180;
-  if (degrees > maxDegrees || minutes < 0.0 || minutes >= 60.0) return false;
+  if (degrees > maxDegrees || minutes < 0.0 || minutes >= 60.0 || (degrees == maxDegrees && minutes > 0.0)) return false;
   const char h = hemisphere[0];
   if (latitude && h != 'N' && h != 'S') return false;
   if (!latitude && h != 'E' && h != 'W') return false;
@@ -2413,8 +2400,6 @@ void setup() {
   }
 
   gpsSerial.begin(gpsBaud, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
-  delay(250);
-  sendUbx(0x06, 0x17, nullptr, 0); // Poll CFG-NMEA; enable invalid-position output while preserving other settings.
   simulatorSerial.begin(gpsBaud, SERIAL_8N1, 9, 8);
   Serial.println("NMEA simulator UART1 ready: TX GPIO8, RX GPIO9, 57600 baud");
 
