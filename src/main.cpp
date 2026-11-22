@@ -1602,7 +1602,7 @@ setInterval(()=>{if(!document.getElementById('gpsTab').classList.contains('hidde
 setInterval(()=>{if(!document.getElementById('imuTab').classList.contains('hidden'))refreshImu();},200);
 setInterval(()=>{if(!document.getElementById('testsTab').classList.contains('hidden'))refreshUart();},500);
 setInterval(()=>{if(!document.getElementById('ubxTab').classList.contains('hidden'))refreshUbxStatus();},500);
-setInterval(()=>{if(!document.getElementById('aiTab').classList.contains('hidden'))refreshAi();},1000);
+setInterval(()=>{if(!document.getElementById('aiTab').classList.contains('hidden')||!document.getElementById('satTab').classList.contains('hidden'))refreshAi();},1000);
 setInterval(()=>{if(!document.getElementById('satTab').classList.contains('hidden'))refreshSatellites();},1500);
 setInterval(()=>{if(!document.getElementById('deviceTab').classList.contains('hidden'))refreshNetworkStatus();},5000);
 refreshNetworkStatus();
