@@ -10,7 +10,7 @@ class GnssAiMonitor {
 public:
   GnssAiMonitor() { loadBuiltinProfile(); }
   void loadBuiltinProfile() {
-    profileEnabled_ = GnssTrainedModel::enabled;
+    profileEnabled_ = GnssTrainedModel::enabled && strcmp(GnssTrainedModel::role, "spoofing_signature") != 0;
     strncpy(profileRole_, GnssTrainedModel::role, sizeof(profileRole_)-1);
     profileRole_[sizeof(profileRole_)-1]=0;
     profileMask_ = GnssTrainedModel::featureMask;
@@ -27,7 +27,7 @@ public:
     for(uint8_t i=0;i<6;i++) if((mask&(1U<<i))&&(!isfinite(center[i])||!isfinite(scale[i])||scale[i]<=0)) return false;
     profileMask_=mask;profileThreshold_=threshold;profileSamples_=samples;
     strncpy(profileRole_,role,sizeof(profileRole_)-1);profileRole_[sizeof(profileRole_)-1]=0;
-    profileEnabled_=true;
+    profileEnabled_=strcmp(role,"spoofing_signature")!=0;
     for(uint8_t i=0;i<6;i++){profileCenter_[i]=center[i];profileScale_[i]=scale[i];}
     reset();return true;
   }
