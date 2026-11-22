@@ -1,10 +1,10 @@
 #pragma once
 #include <stdint.h>
 
-// Generated from ai_dataset (2).csv: stable FIX + non-anomalous rows only.
-// GNSS-only baseline: IMU features excluded because the recording spans
-// separate boot sessions with different IMU magnitude baselines.
+// Historical signature from a recording made during GNSS spoofing.
+// NOT a normal-navigation baseline; it describes the observed spoofing episode.
 namespace GnssTrainedModel {
+static constexpr const char* role = "spoofing_signature";
 static constexpr bool enabled = true;
 static constexpr uint8_t featureMask = 39;
 static constexpr uint16_t centerQ[6] = {77, 1200, 3917, 1, 1, 2200};

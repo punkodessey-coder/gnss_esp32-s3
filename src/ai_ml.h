@@ -8,6 +8,34 @@
 // This is a statistical ML baseline, not a trained neural network.
 class GnssAiMonitor {
 public:
+  GnssAiMonitor() { loadBuiltinProfile(); }
+  void loadBuiltinProfile() {
+    profileEnabled_ = GnssTrainedModel::enabled;
+    strncpy(profileRole_, GnssTrainedModel::role, sizeof(profileRole_)-1);
+    profileRole_[sizeof(profileRole_)-1]=0;
+    profileMask_ = GnssTrainedModel::featureMask;
+    profileThreshold_ = (float)GnssTrainedModel::thresholdQ / 100.0f;
+    profileSamples_ = GnssTrainedModel::trainingSamples;
+    for (uint8_t i=0;i<6;i++) {
+      profileCenter_[i]=(float)GnssTrainedModel::centerQ[i]/100.0f;
+      profileScale_[i]=fmaxf(0.01f,(float)GnssTrainedModel::scaleQ[i]/100.0f);
+    }
+  }
+  bool setProfile(uint8_t mask,const float* center,const float* scale,float threshold,uint32_t samples,const char* role) {
+    if(!mask||(mask & 0xC0)||!center||!scale||!isfinite(threshold)||threshold<2.5f||threshold>10.0f||samples<1||!role) return false;
+    if(strcmp(role,"spoofing_signature")!=0&&strcmp(role,"normal_baseline")!=0) return false;
+    for(uint8_t i=0;i<6;i++) if((mask&(1U<<i))&&(!isfinite(center[i])||!isfinite(scale[i])||scale[i]<=0)) return false;
+    profileMask_=mask;profileThreshold_=threshold;profileSamples_=samples;
+    strncpy(profileRole_,role,sizeof(profileRole_)-1);profileRole_[sizeof(profileRole_)-1]=0;
+    profileEnabled_=true;
+    for(uint8_t i=0;i<6;i++){profileCenter_[i]=center[i];profileScale_[i]=scale[i];}
+    reset();return true;
+  }
+  uint8_t profileMask() const{return profileMask_;}
+  float profileCenter(uint8_t i) const{return i<6?profileCenter_[i]:0;}
+  float profileScale(uint8_t i) const{return i<6?profileScale_[i]:1;}
+  float profileThreshold() const{return profileThreshold_;}
+  const char* profileRole() const{return profileRole_;}
   void reset() {
     samples_ = 0;
     for (uint8_t i = 0; i < 6; ++i) {
@@ -93,11 +121,11 @@ public:
 
     maxZ_ = 0.0f;
     anomalyCode_ = "normal";
-    if (GnssTrainedModel::enabled) {
+    if (profileEnabled_) {
       for (uint8_t i = 0; i < 6; ++i) {
-        if (!available[i] || !(GnssTrainedModel::featureMask & (1U << i))) continue;
-        const float center = (float)GnssTrainedModel::centerQ[i] / 100.0f;
-        const float scale = fmaxf(0.01f, (float)GnssTrainedModel::scaleQ[i] / 100.0f);
+        if (!available[i] || !(profileMask_ & (1U << i))) continue;
+        const float center = profileCenter_[i];
+        const float scale = profileScale_[i];
         const float z = fabsf(features[i] - center) / scale;
         if (z > maxZ_) {
           maxZ_ = z;
@@ -132,7 +160,7 @@ public:
     const bool baselineReady = featureSamples_[2] >= 12 || featureSamples_[5] >= 12 ||
       (featureSamples_[3] >= 12 && featureSamples_[4] >= 12) ||
       (featureSamples_[0] >= 12 && featureSamples_[1] >= 12);
-    anomaly_ = (GnssTrainedModel::enabled || baselineReady) && maxZ_ >= (GnssTrainedModel::enabled ? (float)GnssTrainedModel::thresholdQ / 100.0f : 3.5f);
+    anomaly_ = (profileEnabled_ || baselineReady) && maxZ_ >= (profileEnabled_ ? profileThreshold_ : 3.5f);
     if (!anomaly_) {
       ++samples_;
       for (uint8_t i = 0; i < 6; ++i) {
@@ -145,7 +173,7 @@ public:
       }
     }
 
-    const bool baselineNowReady = GnssTrainedModel::enabled || featureSamples_[2] >= 12 || featureSamples_[5] >= 12 ||
+    const bool baselineNowReady = profileEnabled_ || featureSamples_[2] >= 12 || featureSamples_[5] >= 12 ||
       (featureSamples_[3] >= 12 && featureSamples_[4] >= 12) ||
       (featureSamples_[0] >= 12 && featureSamples_[1] >= 12);
     if (!baselineNowReady) {
@@ -167,6 +195,10 @@ public:
       risk_ = "degrading";
     }
     if (mismatch_) risk_ = "integrity_warning";
+    if (profileEnabled_ && strcmp(profileRole_, "spoofing_signature") == 0) {
+      if (anomaly_) risk_ = "spoofing_signature_deviation";
+      else { risk_ = "spoofing_signature_match"; anomaly_ = true; anomalyCode_ = "spoofing_profile_match"; }
+    }
   }
 
   uint32_t samples() const { return samples_; }
@@ -180,11 +212,17 @@ public:
   const char* motion() const { return motion_; }
   float hdopTrend() const { return hdopTrend_; }
   float cnoTrend() const { return cnoTrend_; }
-  bool offlineModelLoaded() const { return GnssTrainedModel::enabled; }
-  uint32_t trainingSamples() const { return GnssTrainedModel::trainingSamples; }
-  bool trained() const { return GnssTrainedModel::enabled || featureSamples_[2] >= 12 || featureSamples_[5] >= 12 || (featureSamples_[3] >= 12 && featureSamples_[4] >= 12) || (featureSamples_[0] >= 12 && featureSamples_[1] >= 12); }
+  bool offlineModelLoaded() const { return profileEnabled_; }
+  uint32_t trainingSamples() const { return profileSamples_; }
+  bool trained() const { return profileEnabled_ || featureSamples_[2] >= 12 || featureSamples_[5] >= 12 || (featureSamples_[3] >= 12 && featureSamples_[4] >= 12) || (featureSamples_[0] >= 12 && featureSamples_[1] >= 12); }
 
 private:
+  bool profileEnabled_=false;
+  uint8_t profileMask_=0;
+  float profileCenter_[6]={0,0,0,0,0,0},profileScale_[6]={1,1,1,1,1,1};
+  float profileThreshold_=4.0f;
+  uint32_t profileSamples_=0;
+  char profileRole_[24]="normal_baseline";
   uint32_t samples_ = 0;
   uint32_t featureSamples_[6] = {0, 0, 0, 0, 0, 0};
   float mean_[6] = {0, 0, 0, 0, 0, 0};

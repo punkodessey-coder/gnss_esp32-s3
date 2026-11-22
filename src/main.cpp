@@ -527,6 +527,7 @@ String aiJson() {
   doc["offline_model_loaded"] = aiMonitor.offlineModelLoaded();
   doc["offline_model_training_rows"] = aiMonitor.trainingSamples();
   doc["model_training_mode"] = aiMonitor.offlineModelLoaded() ? "offline_robust_median_mad" : "online_welford_ram";
+  doc["profile_role"] = aiMonitor.profileRole();
   doc["samples"] = aiMonitor.samples();
   doc["quality_score"] = aiMonitor.qualityScore();
   doc["risk"] = aiMonitor.risk();
@@ -552,6 +553,10 @@ String aiJson() {
     verdict = "ОБНАРУЖЕН ПОДОЗРИТЕЛЬНЫЙ ПРИЗНАК";
     situation = "Скорость, сообщаемая GNSS, не согласуется с перемещением координат.";
     reasons = "Это может указывать на нарушение целостности навигационных данных, но само по себе не доказывает спуффинг.";
+  } else if (String(aiMonitor.risk()) == "spoofing_signature_match") {
+    verdict = "СОВПАДЕНИЕ С ПРОФИЛЕМ СПУФИНГА";
+    situation = "Параметры GNSS похожи на ранее сохранённую сигнатуру спуфинга.";
+    reasons = "Это сходство с историческим профилем, а не самостоятельное доказательство текущей подмены координат.";
   } else if (aiMonitor.anomaly()) {
     verdict = "ОБНАРУЖЕНО СТАТИСТИЧЕСКОЕ ОТКЛОНЕНИЕ";
     situation = "Один или несколько параметров GNSS заметно отличаются от накопленного профиля.";
@@ -801,6 +806,8 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <div class="metric"><span>Тренд SNR</span><strong id="aiSnrTrend">—</strong></div>
 <pre id="aiDetails" class="coords">Модель собирает исходный профиль приёма…</pre>
 <button class="gray" onclick="resetAiModel()">Сбросить профиль модели</button>
+<div class="card"><h3>Профиль: импорт / экспорт</h3><a href="/ai/profile" style="color:#8ab4ff">Скачать профиль JSON</a><p><input id="aiProfileFile" type="file" accept=".json,application/json"></p><button onclick="uploadAiProfile()">Загрузить профиль</button><div id="aiProfileStatus" class="small"></div></div>
+<div class="card"><h3>Контрольная точка для обучения</h3><div class="small">Координаты используются только скриптом на компьютере для отбора строк CSV и не сохраняются в прошивке или профиле. Рекомендуемый радиус: 30–50 м.</div><label>Широта</label><input id="trainRefLat" type="number" step="0.000001"><label>Долгота</label><input id="trainRefLon" type="number" step="0.000001"><label>Радиус, м</label><input id="trainRadius" type="number" min="1" max="500" value="50"><button onclick="makeTrainCommand()">Сформировать команду обучения</button><pre id="trainCommand" class="coords"></pre></div>
 <div class="card"><h3>Журнал обстановки и интервал сообщений</h3><label for="reportInterval">Интервал (10 секунд — 30 минут)</label><select id="reportInterval"><option value="10">10 секунд</option><option value="30">30 секунд</option><option value="60">1 минута</option><option value="300" selected>5 минут — рекомендуется</option><option value="600">10 минут</option><option value="900">15 минут</option><option value="1800">30 минут</option></select><button onclick="saveReportInterval()">Применить интервал</button><div class="ubx-actions"><button onclick="setSituationLogging(true)">Начать журнал</button><button class="gray" onclick="setSituationLogging(false)">Остановить журнал</button><a href="/ai/situation-log" style="color:#8ab4ff;padding:10px">Скачать журнал</a></div><div id="situationLogStatus" class="small">Журнал остановлен</div></div>
 <div class="ubx-actions"><button onclick="setAiLogging(true)">Начать подробную запись CSV</button><button class="gray" onclick="setAiLogging(false)">Остановить запись CSV</button><a href="/ai/dataset" style="color:#8ab4ff;padding:10px">Скачать CSV</a></div><div id="aiLogStatus" class="small">Запись набора данных выключена</div>
 <div class="small">Локальная статистическая ML-модель с онлайн-обучением. Отклонения не доказывают глушение или spoofing. GSV SNR — приближённый уровень сигнала, не калиброванный C/N₀.</div>
@@ -1450,9 +1457,9 @@ document.getElementById('imuData').textContent=
 async function refreshAi(){
   try{
     const d=await (await fetch('/ai/status?ts='+Date.now())).json();
-    const labels={learning:'Накопление профиля',normal:'Норма',degrading:'Качество ухудшается',anomaly:'Статистическое отклонение',integrity_warning:'Несоответствие скорости и перемещения GNSS',no_fix:'Нет фикса',limited_data:'Недостаточно данных',unknown:'Неизвестно'};
+    const labels={learning:'Накопление профиля',normal:'Норма',degrading:'Качество ухудшается',anomaly:'Статистическое отклонение',integrity_warning:'Несоответствие скорости и перемещения GNSS',spoofing_signature_match:'Совпадение с сигнатурой спуфинга',spoofing_signature_deviation:'Отклонение от сигнатуры спуфинга',no_fix:'Нет фикса',limited_data:'Недостаточно данных',unknown:'Неизвестно'};
     const motion={moving:'Движение (по GNSS)',vibration:'Вибрация / динамика',rotation:'Вращение',stationary_or_low_dynamics:'Покой или низкая динамика',imu_unavailable:'IMU недоступен',uncertain:'Неопределённо',unknown:'Неизвестно'};
-    document.getElementById('aiStatus').textContent=d.trained?'Модель активна · профиль накоплен':'Модель активна · накопление профиля';
+    document.getElementById('aiStatus').textContent='Модель активна · роль профиля: '+(d.profile_role==='spoofing_signature'?'сигнатура спуфинга':'нормальный эталон');
     document.getElementById('aiScore').textContent=d.quality_score>=0?d.quality_score+'/100':'—';
     document.getElementById('aiRisk').textContent=labels[d.risk]||d.risk;
     document.getElementById('aiSamples').textContent=String(d.samples);
@@ -1474,6 +1481,17 @@ async function refreshAi(){
       '\nHDOP: '+Number(d.hdop).toFixed(2)+' | спутников в решении: '+d.satellites_used+
       '\nПримечание: '+d.note;
   }catch(e){document.getElementById('aiStatus').textContent='Ошибка AI-статуса: '+e.message;}
+}
+async function uploadAiProfile(){
+  const input=document.getElementById('aiProfileFile'),status=document.getElementById('aiProfileStatus');
+  if(!input.files.length){status.textContent='Выберите JSON-файл';return;}
+  try{const body=await input.files[0].text();const r=await fetch('/ai/profile',{method:'POST',headers:{'Content-Type':'application/json'},body});const d=await r.json();if(!r.ok)throw new Error(d.error||'Ошибка');status.textContent=d.message||'Профиль загружен';refreshAi();}
+  catch(e){status.textContent='Ошибка импорта: '+e.message;}
+}
+function makeTrainCommand(){
+  const a=document.getElementById('trainRefLat').value,b=document.getElementById('trainRefLon').value,r=Number(document.getElementById('trainRadius').value||50);
+  if(!a||!b||!Number.isFinite(Number(a))||!Number.isFinite(Number(b))||Math.abs(Number(a))>90||Math.abs(Number(b))>180||r<1||r>500){document.getElementById('trainCommand').textContent='Проверьте координаты и радиус';return;}
+  document.getElementById('trainCommand').textContent='python scripts/train_ai_model.py ai_dataset.csv --reference-lat '+a+' --reference-lon '+b+' --radius-m '+r;
 }
 async function setAiLogging(enabled){
   try{
@@ -1686,6 +1704,47 @@ void handleAiLogging() {
   String out; serializeJson(doc, out);
   server.send(200, "application/json", out);
 }
+void handleAiProfileDownload() {
+  JsonDocument doc; doc["format"]="gnss-ai-profile-v1"; doc["role"]=aiMonitor.profileRole();
+  doc["feature_mask"]=aiMonitor.profileMask(); doc["threshold"]=aiMonitor.profileThreshold();
+  doc["training_samples"]=aiMonitor.trainingSamples();
+  JsonArray c=doc["center"].to<JsonArray>(), z=doc["scale"].to<JsonArray>();
+  for(uint8_t i=0;i<6;i++){c.add(aiMonitor.profileCenter(i));z.add(aiMonitor.profileScale(i));}
+  String out;serializeJson(doc,out);
+  server.sendHeader("Content-Disposition","attachment; filename=gnss-ai-profile.json");
+  server.send(200,"application/json; charset=utf-8",out);
+}
+void handleAiProfileUpload() {
+  if(!sdReady){server.send(503,"application/json",R"({"ok":false,"error":"microSD недоступна"})");return;}
+  JsonDocument doc;DeserializationError e=deserializeJson(doc,server.arg("plain"));
+  if(e||doc["format"]!="gnss-ai-profile-v1"||!doc["center"].is<JsonArray>()||!doc["scale"].is<JsonArray>()||
+     doc["center"].as<JsonArray>().size()!=6||doc["scale"].as<JsonArray>().size()!=6){
+    server.send(400,"application/json",R"({"ok":false,"error":"Некорректный JSON-профиль"})");return;
+  }
+  float c[6],z[6];for(uint8_t i=0;i<6;i++){c[i]=doc["center"][i].as<float>();z[i]=doc["scale"][i].as<float>();}
+  const char* role=doc["role"]|"normal_baseline";
+  if(!aiMonitor.setProfile(doc["feature_mask"].as<uint8_t>(),c,z,doc["threshold"].as<float>(),
+      doc["training_samples"].as<uint32_t>(),role)){
+    server.send(400,"application/json",R"({"ok":false,"error":"Параметры профиля не прошли проверку"})");return;
+  }
+  if(SD_MMC.exists("/ai_profile.json")) SD_MMC.remove("/ai_profile.json");
+  File file=SD_MMC.open("/ai_profile.json",FILE_WRITE);
+  if(!file){server.send(500,"application/json",R"({"ok":false,"error":"Не удалось сохранить профиль"})");return;}
+  serializeJson(doc,file);file.close();
+  server.send(200,"application/json",R"({"ok":true,"message":"Профиль активирован и сохранён на microSD"})");
+}
+void loadAiProfileFromSd() {
+  if(!sdReady||!SD_MMC.exists("/ai_profile.json"))return;
+  File file=SD_MMC.open("/ai_profile.json",FILE_READ);if(!file)return;
+  JsonDocument doc;DeserializationError e=deserializeJson(doc,file);file.close();if(e)return;
+  if(!doc["center"].is<JsonArray>()||!doc["scale"].is<JsonArray>()||
+     doc["center"].as<JsonArray>().size()!=6||doc["scale"].as<JsonArray>().size()!=6)return;
+  float c[6],z[6];for(uint8_t i=0;i<6;i++){c[i]=doc["center"][i].as<float>();z[i]=doc["scale"][i].as<float>();}
+  const char* role=doc["role"]|"normal_baseline";
+  aiMonitor.setProfile(doc["feature_mask"].as<uint8_t>(),c,z,doc["threshold"].as<float>(),
+    doc["training_samples"].as<uint32_t>(),role);
+}
+
 void handleAiDataset() {
   if (!sdReady || !SD_MMC.exists("/ai_dataset.csv")) {
     server.send(404, "text/plain; charset=utf-8", "CSV пока не создан");
@@ -2444,6 +2503,7 @@ void setup() {
   SD_MMC.setPins(14, 15, 16, 18, 17, 21); // CLK, CMD, D0, D1, D2, D3
   if (SD_MMC.begin(SD_MOUNT, true)) {
     sdReady = true;
+    loadAiProfileFromSd();
     Serial.println("SD card mounted");
   } else {
     Serial.println("SD card not mounted");
@@ -2478,6 +2538,8 @@ void setup() {
   server.on("/ubx/status", HTTP_GET, handleUbxStatus);
   server.on("/imu", HTTP_GET, handleImu);
   server.on("/ai/status", HTTP_GET, handleAiStatus);
+  server.on("/ai/profile", HTTP_GET, handleAiProfileDownload);
+  server.on("/ai/profile", HTTP_POST, handleAiProfileUpload);
   server.on("/ai/reset", HTTP_POST, handleAiReset);
   server.on("/ai/logging", HTTP_POST, handleAiLogging);
   server.on("/ai/situation-logging", HTTP_POST, handleSituationLogging);

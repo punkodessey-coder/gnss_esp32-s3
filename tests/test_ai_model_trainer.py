@@ -39,6 +39,25 @@ class TrainerTests(unittest.TestCase):
         finally:
             Path(path).unlink()
 
+    def test_reference_coordinates_filter_training_rows(self):
+        with tempfile.NamedTemporaryFile("w", newline="", encoding="utf-8", delete=False) as f:
+            fields = ["fix", "lat", "lon", "hdop", "sat_used", "gsv_snr_avg", "sat_visible", "anomaly"]
+            writer = csv.DictWriter(f, fieldnames=fields)
+            writer.writeheader()
+            for _ in range(35):
+                writer.writerow(dict(fix=1, lat=60.0, lon=30.0, hdop=0.8, sat_used=10,
+                                     gsv_snr_avg=35, sat_visible=18, anomaly=0))
+            for _ in range(40):
+                writer.writerow(dict(fix=1, lat=60.01, lon=30.01, hdop=9, sat_used=2,
+                                     gsv_snr_avg=8, sat_visible=3, anomaly=0))
+            path = f.name
+        try:
+            rows, centers, scales, mask = trainer.train(path, (60.0, 30.0), 50)
+            self.assertEqual(rows, 35)
+            self.assertLess(centers[0], 1.0)
+        finally:
+            Path(path).unlink()
+
     def test_too_few_normal_fix_rows_rejected(self):
         with tempfile.NamedTemporaryFile("w", newline="", encoding="utf-8", delete=False) as f:
             fields = ["fix", "hdop", "sat_used", "gsv_snr_avg", "sat_visible", "anomaly"]
