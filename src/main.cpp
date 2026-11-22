@@ -780,7 +780,7 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <svg id="skyPlot" viewBox="0 0 320 320" style="width:100%;max-width:420px;display:block;margin:auto;background:#101820;border-radius:12px">
 <circle cx="160" cy="160" r="140" fill="none" stroke="#64748b"/><circle cx="160" cy="160" r="93.3" fill="none" stroke="#475569"/><circle cx="160" cy="160" r="46.7" fill="none" stroke="#475569"/><path d="M20 160H300 M160 20V300 M61 61L259 259 M259 61L61 259" stroke="#475569"/>
 <g fill="#cbd5e1" font-size="11"><text x="160" y="13" text-anchor="middle">N</text><text x="307" y="164">E</text><text x="160" y="315" text-anchor="middle">S</text><text x="5" y="164">W</text></g></svg><div id="satSummary" class="small">Ожидание GSV…</div></div>
-<div class="card"><h3>Уровень сигнала по спутникам</h3><div class="small">SNR из NMEA GSV, не калиброванный C/N₀ и не RF-спектр.</div><svg id="snrBars" viewBox="0 0 360 180" style="width:100%;display:block;background:#101820;border-radius:10px"></svg></div>
+<div class="card"><h3>Уровень сигнала по спутникам</h3><div class="small">SNR из NMEA GSV, не калиброванный C/N₀ и не RF-спектр.</div><svg id="snrBars" viewBox="0 0 360 205" style="width:100%;display:block;background:#101820;border-radius:10px"></svg></div>
 <div class="card"><h3>Радиочастотный спектр</h3><div class="small">NEO-6M не выдаёт IQ-отсчёты или FFT. Настоящий спектр/водопад требует внешнего SDR или приёмника с IQ.</div></div>
 <div class="card"><h3>Спутники</h3><div id="satelliteList" class="small">Ожидание данных…</div></div>
 <div class="metric"><span>Соответствие базовому профилю</span><strong id="aiScore">—</strong></div>
