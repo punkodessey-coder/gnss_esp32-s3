@@ -776,14 +776,6 @@ async function selectMap(value){
   const token=++mapLoadToken;currentMap=value;setMapStatus('Подготовка карты…','loading');
   if(tileLayer && map){map.removeLayer(tileLayer);tileLayer=null;}
   if(map){map.remove();map=null;gpsMarker=null;}
-    try{
-      await loadYandexApi();
-      yandexMap=new ymaps.Map('map',{center:currentFix?[currentLat,currentLng]:[54.9227,43.3448],zoom:16,controls:['zoomControl']});
-      yandexMap.setType('yandex#hybrid');if(currentFix)updateYandexPoint(currentLat,currentLng);
-      setMapStatus('Яндекс Гибрид загружен; тайлы подгружаются в видимой области.','good');
-    }catch(e){setMapStatus('Ошибка Яндекс.Карт: '+e.message,'error');}
-    return;
-  }
   if(map){map.remove();map=null;gpsMarker=null;}
   setMapStatus('Загружаю библиотеку карты…','loading');
   if(!await ensureLeaflet()||token!==mapLoadToken){if(token===mapLoadToken)initMap();return;}
