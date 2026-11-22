@@ -1586,7 +1586,7 @@ bool openMbtiles(const String& mapName) {
   sqlite3_exec(mbtilesDb, "PRAGMA mmap_size=0;", nullptr, nullptr, nullptr);
   sqlite3_exec(mbtilesDb, "PRAGMA cache_size=2;", nullptr, nullptr, nullptr);
   sqlite3_exec(mbtilesDb, "PRAGMA temp_store=FILE;", nullptr, nullptr, nullptr);
-  rc = sqlite3_prepare_v2(mbtilesDb, "SELECT tile_data FROM tiles WHERE zoom_level=?1 AND tile_column=?2 AND tile_row=?3 LIMIT 1", -1, &mbtilesTileStmt, nullptr);
+  rc = sqlite3_prepare_v2(mbtilesDb, "SELECT rowid FROM tiles WHERE zoom_level=?1 AND tile_column=?2 AND tile_row=?3 LIMIT 1", -1, &mbtilesTileStmt, nullptr);
   if (rc != SQLITE_OK) {
     mbtilesLastRc = rc; mbtilesLastError = "SQL prepare таблицы tiles: " + String(sqlite3_errmsg(mbtilesDb));
     Serial.printf("MBTiles query prepare failed (%d): %s\n", rc, mbtilesLastError.c_str());
@@ -1624,6 +1624,7 @@ void handleMbtilesTile(const String& mapName, int z, int x, int y) {
     String errorBody; serializeJson(errorDoc, errorBody);
     server.send(500, "application/json; charset=utf-8", errorBody); return;
   }
+
   // MBTiles uses TMS rows; Leaflet requests XYZ rows.
   const int tmsY = ((1 << z) - 1) - y;
   sqlite3_reset(mbtilesTileStmt);
@@ -1631,6 +1632,7 @@ void handleMbtilesTile(const String& mapName, int z, int x, int y) {
   sqlite3_bind_int(mbtilesTileStmt, 1, z);
   sqlite3_bind_int(mbtilesTileStmt, 2, x);
   sqlite3_bind_int(mbtilesTileStmt, 3, tmsY);
+
   const uint32_t heapBefore = ESP.getFreeHeap();
   const uint32_t largestBefore = ESP.getMaxAllocHeap();
   const int rc = sqlite3_step(mbtilesTileStmt);
@@ -1640,40 +1642,103 @@ void handleMbtilesTile(const String& mapName, int z, int x, int y) {
     const String detail = rc == SQLITE_DONE
       ? "Тайл отсутствует для этих z/x/y: точка может быть вне покрытия карты"
       : "sqlite3_step вернул код " + String(rc) + ": " + String(sqlite3_errmsg(mbtilesDb));
-    if (rc != SQLITE_DONE) { mbtilesLastRc = rc; mbtilesLastError = detail; logMbtilesDiagnostic("TILE READ FAILED map=" + mapName + " z=" + String(z) + " x=" + String(x) + " yXYZ=" + String(y) + " yTMS=" + String(tmsY) + " rc=" + String(rc) + " (" + String(sqlite3_errstr(rc)) + "): " + String(sqlite3_errmsg(mbtilesDb))); }
+    if (rc != SQLITE_DONE) {
+      mbtilesLastRc = rc; mbtilesLastError = detail;
+      logMbtilesDiagnostic("TILE ROWID FAILED map=" + mapName + " z=" + String(z) + " x=" + String(x) +
+        " yXYZ=" + String(y) + " yTMS=" + String(tmsY) + " rc=" + String(rc) +
+        " (" + String(sqlite3_errstr(rc)) + "): " + String(sqlite3_errmsg(mbtilesDb)));
+    }
     sqlite3_reset(mbtilesTileStmt);
     if (rc == SQLITE_DONE) { sendBlankTile(); return; }
     JsonDocument errorDoc; errorDoc["error"] = detail; errorDoc["sqlite_rc"] = rc;
     errorDoc["map"] = mapName; errorDoc["z"] = z; errorDoc["x"] = x; errorDoc["y_xyz"] = y; errorDoc["y_tms"] = tmsY;
     String errorBody; serializeJson(errorDoc, errorBody);
-    server.send(rc == SQLITE_DONE ? 404 : 500, "application/json; charset=utf-8", errorBody); return;
+    server.send(500, "application/json; charset=utf-8", errorBody);
+    return;
   }
-  const uint8_t* blob = static_cast<const uint8_t*>(sqlite3_column_blob(mbtilesTileStmt, 0));
-  const int blobSize = sqlite3_column_bytes(mbtilesTileStmt, 0);
-  logMbtilesDiagnostic("TILE OK map=" + mapName + " z=" + String(z) + " x=" + String(x) +
-    " y=" + String(y) + " bytes=" + String(blobSize) + " heap_free=" + String(ESP.getFreeHeap()) +
-    " heap_largest=" + String(ESP.getMaxAllocHeap()));
-  if (!blob || blobSize <= 0) {
-    sqlite3_reset(mbtilesTileStmt);
+
+  const sqlite3_int64 rowid = sqlite3_column_int64(mbtilesTileStmt, 0);
+  sqlite3_reset(mbtilesTileStmt);
+
+  // Incremental BLOB I/O avoids allocating the complete compressed tile in ESP32 heap.
+  sqlite3_blob *tileBlob = nullptr;
+  int blobRc = sqlite3_blob_open(mbtilesDb, "main", "tiles", "tile_data", rowid, 0, &tileBlob);
+  if (blobRc != SQLITE_OK || !tileBlob) {
+    mbtilesLastRc = blobRc;
+    mbtilesLastError = "sqlite3_blob_open: " + String(sqlite3_errmsg(mbtilesDb));
+    logMbtilesDiagnostic("BLOB OPEN FAILED rowid=" + String((long long)rowid) + " rc=" +
+      String(blobRc) + " error=" + String(sqlite3_errmsg(mbtilesDb)));
+    JsonDocument errorDoc; errorDoc["error"] = mbtilesLastError; errorDoc["sqlite_rc"] = blobRc;
+    String errorBody; serializeJson(errorDoc, errorBody);
+    server.send(500, "application/json; charset=utf-8", errorBody);
+    return;
+  }
+
+  const int blobSize = sqlite3_blob_bytes(tileBlob);
+  if (blobSize <= 0) {
+    sqlite3_blob_close(tileBlob);
     sendBlankTile();
     return;
   }
-  const char* mime = tileMimeType(blob, blobSize);
+
+  uint8_t chunkBuffer[1024];
+  const int firstSize = blobSize < 16 ? blobSize : 16;
+  blobRc = sqlite3_blob_read(tileBlob, chunkBuffer, firstSize, 0);
+  if (blobRc != SQLITE_OK) {
+    mbtilesLastRc = blobRc;
+    mbtilesLastError = "sqlite3_blob_read header: " + String(sqlite3_errmsg(mbtilesDb));
+    logMbtilesDiagnostic("BLOB HEADER READ FAILED rowid=" + String((long long)rowid) +
+      " rc=" + String(blobRc) + " error=" + String(sqlite3_errmsg(mbtilesDb)));
+    sqlite3_blob_close(tileBlob);
+    JsonDocument errorDoc; errorDoc["error"] = mbtilesLastError; errorDoc["sqlite_rc"] = blobRc;
+    String errorBody; serializeJson(errorDoc, errorBody);
+    server.send(500, "application/json; charset=utf-8", errorBody);
+    return;
+  }
+
+  const char* mime = tileMimeType(chunkBuffer, firstSize);
+  logMbtilesDiagnostic("TILE BLOB OPEN map=" + mapName + " z=" + String(z) + " x=" + String(x) +
+    " y=" + String(y) + " rowid=" + String((long long)rowid) + " bytes=" + String(blobSize) +
+    " heap_free=" + String(ESP.getFreeHeap()) + " heap_largest=" + String(ESP.getMaxAllocHeap()));
+
   server.sendHeader("Cache-Control", "public, max-age=86400");
   server.setContentLength(blobSize);
   server.send(200, mime, "");
-  // Write in bounded chunks and give up if the client stalls/disconnects, so one dead
-  // connection cannot block the single-threaded server forever.
+
   auto& client = server.client();
-  const uint8_t* p = blob;
-  int remaining = blobSize, stalls = 0;
-  while (remaining > 0 && client.connected()) {
-    const int chunk = remaining > 4096 ? 4096 : remaining;
-    const size_t written = client.write(p, chunk);
-    if (written == 0) { if (++stalls > 200) break; delay(5); continue; }
-    stalls = 0; p += written; remaining -= (int)written;
+  int offset = 0;
+  int stalls = 0;
+  while (offset < blobSize && client.connected()) {
+    const int count = (blobSize - offset) > (int)sizeof(chunkBuffer)
+      ? (int)sizeof(chunkBuffer) : (blobSize - offset);
+    if (offset != 0) {
+      blobRc = sqlite3_blob_read(tileBlob, chunkBuffer, count, offset);
+      if (blobRc != SQLITE_OK) {
+        logMbtilesDiagnostic("BLOB STREAM READ FAILED rowid=" + String((long long)rowid) +
+          " offset=" + String(offset) + " rc=" + String(blobRc) +
+          " error=" + String(sqlite3_errmsg(mbtilesDb)));
+        break;
+      }
+    } else if (count > firstSize) {
+      blobRc = sqlite3_blob_read(tileBlob, chunkBuffer, count, 0);
+      if (blobRc != SQLITE_OK) break;
+    }
+
+    int sent = 0;
+    while (sent < count && client.connected()) {
+      const size_t written = client.write(chunkBuffer + sent, count - sent);
+      if (written == 0) {
+        if (++stalls > 200) break;
+        delay(5);
+        continue;
+      }
+      stalls = 0;
+      sent += (int)written;
+    }
+    if (sent < count) break;
+    offset += count;
   }
-  sqlite3_reset(mbtilesTileStmt);
+  sqlite3_blob_close(tileBlob);
 }
 
 void handleMbtilesLogs() {
