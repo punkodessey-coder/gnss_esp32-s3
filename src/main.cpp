@@ -83,6 +83,11 @@ WebServer server(80);
 bool firmwareUploadOk = false;
 String firmwareUploadError;
 size_t firmwareUploadBytes = 0;
+bool firmwareUploadIsZip = false, firmwareUploadStarted = false;
+uint8_t firmwareZipHeader[512] = {};
+size_t firmwareZipHeaderBytes = 0, firmwareZipHeaderExpected = 30;
+uint32_t firmwareZipRemaining = 0, firmwareZipExpectedCrc = 0, firmwareZipCrc = 0xFFFFFFFFUL;
+uint32_t situationLogEntryNumber = 0;
 Preferences preferences;
 
 bool haveFix = false;
@@ -533,15 +538,14 @@ String aiJson() {
   doc["avg_gsv_snr"] = avgGsvSnr;
   doc["snr_satellites"] = gsvSnrCount;
   doc["fix"] = haveFix;
+  doc["coordinates_available"] = coordinatesAvailable;
+  doc["coordinate_source"] = coordinateSource;
+  doc["coordinate_age_ms"] = coordinatesAvailable ? (long)(millis() - lastCoordinateMs) : -1;
   doc["hdop"] = hdop;
   doc["accel_magnitude_mps2"] = imuReady ? sqrtf(ax*ax + ay*ay + az*az) : 0.0f;
   doc["linear_accel_estimate_mps2"] = imuReady ? fabsf(sqrtf(ax*ax + ay*ay + az*az) - 9.80665f) : 0.0f;
   String situation, verdict, reasons;
-  if (!haveFix) {
-    verdict = "НЕТ АКТУАЛЬНОГО GNSS-ФИКСА";
-    situation = "Приёмник сейчас не выдаёт актуальное навигационное решение.";
-    reasons = "Проверка спуффинга ограничена: нет действующего фикса и координат для проверки целостности.";
-  } else if (aiMonitor.mismatch()) {
+  if (aiMonitor.mismatch()) {
     verdict = "ОБНАРУЖЕН ПОДОЗРИТЕЛЬНЫЙ ПРИЗНАК";
     situation = "Скорость, сообщаемая GNSS, не согласуется с перемещением координат.";
     reasons = "Это может указывать на нарушение целостности навигационных данных, но само по себе не доказывает спуффинг.";
@@ -549,22 +553,22 @@ String aiJson() {
     verdict = "ОБНАРУЖЕНО СТАТИСТИЧЕСКОЕ ОТКЛОНЕНИЕ";
     situation = "Один или несколько параметров GNSS заметно отличаются от накопленного профиля.";
     reasons = "Код отклонения: " + String(aiMonitor.anomalyCode()) + ". Требуется наблюдение за динамикой показателей.";
-  } else if (satellites < 4 || hdop > 3.0f) {
-    verdict = "НЕДОСТАТОЧНОЕ КАЧЕСТВО GNSS";
-    situation = "Фикс есть, но геометрия спутников или точность решения ограничивают надёжность оценки.";
+  } else if (haveFix && (satellites < 4 || hdop > 3.0f)) {
+    verdict = "НИЗКОЕ КАЧЕСТВО НАВИГАЦИОННОГО РЕШЕНИЯ";
+    situation = "Фикс получен, но геометрия спутников или HDOP ограничивают надёжность координат.";
     reasons = "Спутников в решении: " + String(satellites) + "; HDOP: " + String(hdop, 2) + ".";
   } else if (String(aiMonitor.risk()) == "degrading") {
     verdict = "КАЧЕСТВО GNSS УХУДШАЕТСЯ";
     situation = "Наблюдается ухудшение тренда HDOP/SNR.";
     reasons = "HDOP trend: " + String(aiMonitor.hdopTrend(), 2) + "; SNR trend: " + String(aiMonitor.cnoTrend(), 1) + ".";
   } else if (!aiMonitor.trained()) {
-    verdict = "НАКОПЛЕНИЕ БАЗОВОГО ПРОФИЛЯ";
-    situation = "Фикс получен. Система собирает статистику для сравнения с обычным поведением приёмника.";
-    reasons = "Пока недостаточно обучающих интервалов для уверенного статистического сравнения.";
+    verdict = haveFix ? "НАКОПЛЕНИЕ БАЗОВОГО ПРОФИЛЯ" : "НЕТ ФИКСА — НАКОПЛЕНИЕ ПРОДОЛЖАЕТСЯ";
+    situation = "Система анализирует все доступные данные независимо от наличия фикса.";
+    reasons = "Для обучения используются доступные уровни сигналов, видимые спутники и измерения IMU. Координатные проверки выполняются только при FIX.";
   } else {
-    verdict = "ЯВНЫХ ОТКЛОНЕНИЙ НЕ ОБНАРУЖЕНО";
-    situation = "По доступным GNSS-показателям сейчас не выявлено проверяемых признаков нарушения целостности.";
-    reasons = "Фикс актуален; спутников в решении: " + String(satellites) + "; видно по GSV: " + String(satellitesVisible) + "; HDOP: " + String(hdop, 2) + "; средний GSV SNR: " + String(avgGsvSnr, 1) + ". Проверка скорости и перемещения не сработала. Это не гарантирует отсутствие спуффинга.";
+    verdict = haveFix ? "ЯВНЫХ ОТКЛОНЕНИЙ НЕ ОБНАРУЖЕНО" : "АНАЛИЗ БЕЗ ФИКСА: ЯВНЫХ ОТКЛОНЕНИЙ НЕ ВЫЯВЛЕНО";
+    situation = "По доступным телеметрическим данным сейчас не выявлено статистических отклонений.";
+    reasons = "Видно спутников: " + String(satellitesVisible) + "; средний GSV SNR: " + String(avgGsvSnr, 1) + "; проверка скорости и перемещения: " + String(haveFix ? "доступна" : "недоступна без FIX") + ". Это не гарантирует отсутствие помех или спуфинга.";
   }
   if (imuReady) reasons += " IMU доступен, но акселерометр и гироскоп не откалиброваны и исключены из оценки GNSS-целостности.";
   else reasons += " IMU недоступен и не участвует в оценке.";
@@ -765,8 +769,8 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 </div>
 <div class="card">
 <h2>Загрузка новой прошивки</h2>
-<p>Выберите бинарный файл .bin, собранный для этой платы ESP32-S3. Во время обновления не отключайте питание и не закрывайте страницу.</p>
-<input id="firmwareFile" type="file" accept=".bin,application/octet-stream">
+<p>Выберите BIN или ZIP-архив прошивки, скачанный из интерфейса устройства. ZIP должен содержать BIN без сжатия. Во время обновления не отключайте питание и не закрывайте страницу.</p>
+<input id="firmwareFile" type="file" accept=".bin,.zip,application/octet-stream,application/zip">
 <div><button onclick="uploadFirmware()">Загрузить и установить прошивку</button></div>
 <progress id="firmwareProgress" max="100" value="0" style="width:100%;margin-top:12px"></progress>
 <div id="firmwareUploadStatus" class="small">Ожидание файла</div>
@@ -889,7 +893,7 @@ function setMapStatus(message,state=''){
 }
 function disableGpsFollow(){if(!followGps)return;followGps=false;document.getElementById('followStatus').textContent='Ручное управление картой';}
 function centerOnGps(){
-  if(!currentFix){setMapStatus('Нет актуального GPS-фикса — центрировать некуда','error');return;}
+  if(!currentCoordinatesAvailable){setMapStatus('Координаты ещё не поступали из NMEA','error');return;}
   followGps=true;document.getElementById('followStatus').textContent='Автоцентрирование включено';
   if(map)map.setView([currentLat,currentLng],Math.max(map.getZoom(),14),{animate:false});
 }
@@ -965,7 +969,7 @@ async function refreshSavedPoints(){
  }catch(e){document.getElementById('savedPointsList').textContent='Ошибка загрузки точек';}
 }
 async function saveCurrentPoint(){
- if(!currentFix){alert('Нет актуального GPS-фикса');return;}
+ if(!currentCoordinatesAvailable){alert('Координаты ещё не поступали из NMEA');return;}
  const name=prompt('Название точки:','Новая точка'); if(!name||!name.trim())return;
  const r=await fetch('/points/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name.trim()})});
  if(r.ok)refreshSavedPoints();else alert('Не удалось сохранить точку');
@@ -1076,8 +1080,8 @@ async function loadFirmwareInfo(){
 function downloadCurrentFirmware(){window.location.href='/firmware/download';}
 function uploadFirmware(){
  const input=document.getElementById('firmwareFile'),status=document.getElementById('firmwareUploadStatus'),progress=document.getElementById('firmwareProgress');
- if(!input.files||!input.files.length){status.textContent='Сначала выберите файл .bin';return;}
- const file=input.files[0];if(!file.name.toLowerCase().endsWith('.bin')){status.textContent='Нужен бинарный файл .bin';return;}
+ if(!input.files||!input.files.length){status.textContent='Сначала выберите BIN или ZIP-файл';return;}
+ const file=input.files[0],fileName=file.name.toLowerCase();if(!fileName.endsWith('.bin')&&!fileName.endsWith('.zip')){status.textContent='Выберите файл прошивки .bin или .zip';return;}
  if(!confirm('Установить '+file.name+' ('+file.size+' байт)? ESP32 перезагрузится.'))return;
  const data=new FormData();data.append('firmware',file,file.name);
  const xhr=new XMLHttpRequest();xhr.open('POST','/firmware/update');xhr.timeout=180000;
@@ -1571,7 +1575,7 @@ void handleSavePoint() {
   if (deserializeJson(input, server.arg("plain"))) { server.send(400, "text/plain", "Invalid JSON"); return; }
   String name = input["name"] | "";
   name.trim();
-  if (!name.length() || name.length() > 48 || !haveFix) { server.send(400, "text/plain", "Valid name and current fix required"); return; }
+  if (!name.length() || name.length() > 48 || !coordinatesAvailable) { server.send(400, "text/plain; charset=utf-8", "Нужно имя и полученные координаты"); return; }
   JsonDocument doc;
   deserializeJson(doc, savedPointsResponse());
   JsonArray points = doc.as<JsonArray>();
@@ -1694,10 +1698,11 @@ void handleSituationLogging() {
   const bool enabled = server.arg("enabled") == "1";
   if (enabled && !sdReady) { server.send(503, "application/json", R"({"enabled":false,"error":"microSD недоступна"})"); return; }
   if (enabled) {
+    situationLogEntryNumber = 0;
     if (SD_MMC.exists("/situation_log.csv")) SD_MMC.remove("/situation_log.csv");
     File fresh = SD_MMC.open("/situation_log.csv", FILE_WRITE);
     if (!fresh) { server.send(500, "application/json", R"({"enabled":false,"error":"Не удалось создать журнал"})"); return; }
-    fresh.println("timestamp_utc,time_status,uptime_ms,fix,sat_used,sat_visible,hdop,gsv_snr_avg,gps_speed_mps,anomaly,mismatch,verdict,reasons");
+    fresh.println("№;Дата и время;Время UTC;Время синхронизировано;Координаты получены;Широта;Долгота;Источник координат;FIX;Спутников в решении;Спутников видно;HDOP;Средний уровень сигнала, дБ-Гц;Скорость, м/с;Статистическое отклонение;Несоответствие скорости и перемещения;Заключение;Причины");
     fresh.close(); lastSituationLogMs = 0;
   }
   situationLoggingEnabled = enabled;
@@ -1721,35 +1726,26 @@ void handleSituationLogDownload() {
 }
 void writeSituationLog() {
   if (!situationLoggingEnabled || !sdReady) return;
-  const unsigned long now = millis();
-  if (lastSituationLogMs && now - lastSituationLogMs < (unsigned long)reportIntervalSeconds * 1000UL) return;
-  lastSituationLogMs = now;
-  File file = SD_MMC.open("/situation_log.csv", FILE_APPEND); if (!file) return;
-  time_t epoch = time(nullptr);
-  char timestamp[24] = "NOT_SYNCED";
-  const bool timeValid = epoch > 1700000000;
-  char timestampLocal[24] = "NOT_SYNCED";
-  if (timeValid) {
-    struct tm utc, local;
-    gmtime_r(&epoch, &utc); localtime_r(&epoch, &local);
-    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &utc);
-    strftime(timestampLocal, sizeof(timestampLocal), "%Y-%m-%dT%H:%M:%S", &local);
-  }
-  if (file.size() == 0) file.println("timestamp_utc,timestamp_local,time_status,uptime_ms,fix,sat_used,sat_visible,hdop,gsv_snr_avg,gps_speed_mps,anomaly,mismatch,verdict,reasons");
-  String verdict = haveFix ? "Оценка GNSS" : "Нет актуального фикса";
-  String reasons;
-  if (!haveFix) reasons = "Нет актуального фикса; оценка ограничена";
-  else if (aiMonitor.mismatch()) { verdict = "Подозрительный признак целостности"; reasons = "Скорость не согласуется с перемещением координат"; }
-  else if (aiMonitor.anomaly()) { verdict = "Статистическое отклонение"; reasons = String("Отклонение: ") + aiMonitor.anomalyCode(); }
-  else if (satellites < 4 || hdop > 3.0f) { verdict = "Недостаточное качество GNSS"; reasons = "Мало спутников или высокий HDOP"; }
-  else if (String(aiMonitor.risk()) == "degrading") { verdict = "Качество GNSS ухудшается"; reasons = "Ухудшение тренда HDOP/SNR"; }
-  else if (!aiMonitor.trained()) { verdict = "Накопление профиля"; reasons = "Недостаточно интервалов для статистики"; }
-  else { verdict = "Явных отклонений не выявлено"; reasons = "Фикс актуален; статистика GNSS без выраженных отклонений; проверка скорости/перемещения не сработала. Это не исключает спуффинг."; }
-  verdict.replace(',', ';'); reasons.replace(',', ';');
-  file.printf("%s,%s,%s,%lu,%u,%d,%d,%.2f,%.2f,%.2f,%u,%u,\"%s\",\"%s\"\n",
-    timestamp, timestampLocal, timeValid ? "NTP_SYNCED" : "NOT_SYNCED", now, haveFix?1U:0U, satellites,
-    satellitesVisible, hdop, gsvSnrCount?avgGsvSnr:NAN, gps.speed.isValid()?gps.speed.mps():NAN,
-    aiMonitor.anomaly()?1U:0U, aiMonitor.mismatch()?1U:0U, verdict.c_str(), reasons.c_str());
+  const unsigned long now=millis();
+  if(lastSituationLogMs&&now-lastSituationLogMs<(unsigned long)reportIntervalSeconds*1000UL)return;
+  lastSituationLogMs=now;
+  File file=SD_MMC.open("/situation_log.csv",FILE_APPEND);if(!file)return;
+  const time_t epoch=time(nullptr);const bool timeValid=epoch>1700000000;
+  char localStamp[24]="Нет синхронизации",utcStamp[24]="—";
+  if(timeValid){struct tm local,utc;localtime_r(&epoch,&local);gmtime_r(&epoch,&utc);strftime(localStamp,sizeof(localStamp),"%d.%m.%Y %H:%M:%S",&local);strftime(utcStamp,sizeof(utcStamp),"%d.%m.%Y %H:%M:%S",&utc);}
+  if(file.size()==0)file.println("№;Дата и время;Время UTC;Время синхронизировано;Координаты получены;Широта;Долгота;Источник координат;FIX;Спутников в решении;Спутников видно;HDOP;Средний уровень сигнала, дБ-Гц;Скорость, м/с;Статистическое отклонение;Несоответствие скорости и перемещения;Заключение;Причины");
+  String verdict=haveFix?"FIX подтверждён":"Нет FIX",reasons;
+  if(aiMonitor.mismatch()){verdict="Подозрительный признак целостности";reasons="Скорость не согласуется с перемещением координат";}
+  else if(aiMonitor.anomaly()){verdict="Статистическое отклонение";reasons=String("Отклонение: ")+aiMonitor.anomalyCode();}
+  else if(!haveFix){reasons="Навигационный FIX отсутствует; анализ доступных сигналов и IMU продолжается; координатные проверки недоступны";}
+  else if(satellites<4||hdop>3.0f){verdict="Низкое качество GNSS";reasons="Мало спутников в решении или высокий HDOP";}
+  else if(String(aiMonitor.risk())=="degrading"){verdict="Качество GNSS ухудшается";reasons="Ухудшается тренд HDOP/SNR";}
+  else if(!aiMonitor.trained()){verdict="Накопление профиля";reasons="Недостаточно интервалов для статистического сравнения";}
+  else{verdict="Явных отклонений не выявлено";reasons="Статистический анализ доступных данных не выявил выраженных отклонений; это не доказывает отсутствие помех или спуфинга";}
+  verdict.replace(';',',');reasons.replace(';',',');++situationLogEntryNumber;
+  file.printf("%lu;%s;%s;%s;%s;",(unsigned long)situationLogEntryNumber,localStamp,utcStamp,timeValid?"Да":"Нет",coordinatesAvailable?"Да":"Нет");
+  if(coordinatesAvailable)file.printf("%.7f;%.7f;%s;",lat,lng,coordinateSource.c_str());else file.print(";;;");
+  file.printf("%s;%d;%d;%.2f;%.2f;%.2f;%s;%s;\"%s\";\"%s\"\n",haveFix?"Да":"Нет",satellites,satellitesVisible,hdop,gsvSnrCount?avgGsvSnr:NAN,gps.speed.isValid()?gps.speed.mps():NAN,aiMonitor.anomaly()?"Да":"Нет",aiMonitor.mismatch()?"Да":"Нет",verdict.c_str(),reasons.c_str());
   file.close();
 }
 void handleMaps() {
@@ -2265,30 +2261,69 @@ void handleFirmwareUploadResult() {
   delay(600);ESP.restart();
 }
 
+static uint16_t zipRead16(const uint8_t* p) { return (uint16_t)p[0] | ((uint16_t)p[1] << 8); }
+static uint32_t zipRead32(const uint8_t* p) { return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
+static uint32_t zipCrc32Update(uint32_t crc, const uint8_t* data, size_t length) {
+  for (size_t i=0;i<length;i++) { crc^=data[i]; for(uint8_t b=0;b<8;b++) crc=(crc>>1)^((crc&1)?0xEDB88320UL:0); } return crc;
+}
+static void firmwareUploadFail(const String& message) {
+  if(firmwareUploadStarted) Update.abort();
+  firmwareUploadStarted=false; firmwareUploadOk=false; firmwareUploadError=message;
+}
+static bool firmwareZipHeaderReady() {
+  const uint8_t* h=firmwareZipHeader;
+  if(zipRead32(h)!=0x04034b50UL){firmwareUploadFail("ZIP не распознан: отсутствует заголовок архива");return false;}
+  const uint16_t flags=zipRead16(h+6),method=zipRead16(h+8),nameLength=zipRead16(h+26),extraLength=zipRead16(h+28);
+  if(flags&0x0008){firmwareUploadFail("ZIP с data descriptor не поддерживается. Скачайте ZIP из интерфейса устройства");return false;}
+  if(method!=0){firmwareUploadFail("ZIP использует сжатие. Поддерживается ZIP без сжатия из интерфейса устройства или обычный BIN");return false;}
+  if(firmwareZipHeaderExpected!=30U+nameLength+extraLength||!nameLength||firmwareZipHeaderBytes<firmwareZipHeaderExpected){firmwareUploadFail("Некорректный заголовок ZIP");return false;}
+  String entry;for(uint16_t i=0;i<nameLength;i++)entry+=(char)h[30+i];entry.toLowerCase();
+  if(!entry.endsWith(".bin")){firmwareUploadFail("В ZIP не найден BIN-файл прошивки");return false;}
+  const uint32_t compressed=zipRead32(h+18),uncompressed=zipRead32(h+22);
+  if(!compressed||compressed!=uncompressed){firmwareUploadFail("Некорректный размер BIN внутри ZIP");return false;}
+  firmwareZipRemaining=compressed;firmwareZipExpectedCrc=zipRead32(h+14);firmwareZipCrc=0xFFFFFFFFUL;
+  if(!Update.begin(uncompressed,U_FLASH)){firmwareUploadFail("Не удалось начать OTA, код "+String(Update.getError()));Update.printError(Serial);return false;}
+  firmwareUploadStarted=true;return true;
+}
+static void firmwareUploadData(const uint8_t* data,size_t length) {
+  if(firmwareUploadError.length()||!length)return;
+  if(!firmwareUploadIsZip){
+    if(!firmwareUploadStarted){if(!Update.begin(UPDATE_SIZE_UNKNOWN,U_FLASH)){firmwareUploadFail("Update.begin failed, code "+String(Update.getError()));return;}firmwareUploadStarted=true;}
+    size_t written=Update.write(data,length);if(written!=length){firmwareUploadFail("Ошибка записи BIN, код "+String(Update.getError()));return;}firmwareUploadBytes+=written;return;
+  }
+  size_t offset=0;
+  while(offset<length&&!firmwareUploadError.length()){
+    if(!firmwareUploadStarted){
+      if(firmwareZipHeaderBytes>=sizeof(firmwareZipHeader)){firmwareUploadFail("Заголовок ZIP слишком большой");break;}
+      firmwareZipHeader[firmwareZipHeaderBytes++]=data[offset++];
+      if(firmwareZipHeaderBytes==30&&firmwareZipHeaderExpected==30){
+        firmwareZipHeaderExpected=30U+zipRead16(firmwareZipHeader+26)+zipRead16(firmwareZipHeader+28);
+        if(firmwareZipHeaderExpected>sizeof(firmwareZipHeader)){firmwareUploadFail("Заголовок ZIP слишком большой");break;}
+      }
+      if(firmwareZipHeaderBytes==firmwareZipHeaderExpected)firmwareZipHeaderReady();
+      continue;
+    }
+    size_t count=min(length-offset,(size_t)firmwareZipRemaining);if(!count)break;
+    size_t written=Update.write(data+offset,count);if(written!=count){firmwareUploadFail("Ошибка записи BIN из ZIP, код "+String(Update.getError()));break;}
+    firmwareZipCrc=zipCrc32Update(firmwareZipCrc,data+offset,count);firmwareUploadBytes+=written;firmwareZipRemaining-=(uint32_t)count;offset+=count;
+  }
+}
 void handleFirmwareUploadStream() {
   HTTPUpload& upload=server.upload();
   if(upload.status==UPLOAD_FILE_START){
     firmwareUploadOk=false;firmwareUploadError="";firmwareUploadBytes=0;
+    firmwareUploadIsZip=upload.filename.endsWith(".zip")||upload.filename.endsWith(".ZIP");
+    firmwareUploadStarted=false;firmwareZipHeaderBytes=0;firmwareZipHeaderExpected=30;firmwareZipRemaining=0;firmwareZipExpectedCrc=0;firmwareZipCrc=0xFFFFFFFFUL;
     Serial.printf("OTA upload start: %s\n",upload.filename.c_str());
-    if(!Update.begin(UPDATE_SIZE_UNKNOWN,U_FLASH)){firmwareUploadError="Update.begin failed, code "+String(Update.getError());Update.printError(Serial);}
-  }else if(upload.status==UPLOAD_FILE_WRITE){
-    if(firmwareUploadError.length()==0){
-      size_t written=Update.write(upload.buf,upload.currentSize);
-      if(written!=upload.currentSize){firmwareUploadError="Flash write failed, code "+String(Update.getError());Update.printError(Serial);Update.abort();}
-      else firmwareUploadBytes+=written;
-    }
-  }else if(upload.status==UPLOAD_FILE_END){
-    if(firmwareUploadError.length()==0&&Update.end(true)){
-      firmwareUploadOk=true;Serial.printf("OTA upload complete: %u bytes\n",(unsigned)firmwareUploadBytes);
-    }else{
-      if(firmwareUploadError.length()==0)firmwareUploadError="Image verification failed, code "+String(Update.getError());
-      Update.printError(Serial);Update.abort();
-    }
-  }else if(upload.status==UPLOAD_FILE_ABORTED){
-    Update.abort();firmwareUploadOk=false;firmwareUploadError="Upload aborted by client";
-  }
+    if(!firmwareUploadIsZip&&!(upload.filename.endsWith(".bin")||upload.filename.endsWith(".BIN")))firmwareUploadFail("Выберите файл BIN или ZIP");
+  }else if(upload.status==UPLOAD_FILE_WRITE)firmwareUploadData(upload.buf,upload.currentSize);
+  else if(upload.status==UPLOAD_FILE_END){
+    if(!firmwareUploadError.length()&&firmwareUploadIsZip&&(!firmwareUploadStarted||firmwareZipRemaining))firmwareUploadFail("Не удалось полностью извлечь BIN из ZIP");
+    if(!firmwareUploadError.length()&&firmwareUploadIsZip&&((firmwareZipCrc^0xFFFFFFFFUL)!=firmwareZipExpectedCrc))firmwareUploadFail("Контрольная сумма BIN внутри ZIP не совпала");
+    if(!firmwareUploadError.length()&&firmwareUploadStarted&&Update.end(true)){firmwareUploadOk=true;firmwareUploadStarted=false;Serial.printf("OTA upload complete: %u bytes\n",(unsigned)firmwareUploadBytes);}
+    else {if(!firmwareUploadError.length())firmwareUploadFail("Проверка образа не пройдена, код "+String(Update.getError()));else if(firmwareUploadStarted){Update.abort();firmwareUploadStarted=false;}Update.printError(Serial);}
+  }else if(upload.status==UPLOAD_FILE_ABORTED){if(firmwareUploadStarted)Update.abort();firmwareUploadStarted=false;firmwareUploadOk=false;firmwareUploadError="Загрузка отменена пользователем";}
 }
-
 void handleSystemReboot() {
   server.send(200, "application/json; charset=utf-8", R"({"ok":true,"message":"ESP32 перезагружается"})");
   delay(250); ESP.restart();
@@ -2638,10 +2673,11 @@ void loop() {
     const float gpsSpeedMps = gps.speed.isValid() ? gps.speed.mps() : 0.0f;
     const float accelMagnitude = imuReady ? sqrtf(ax*ax + ay*ay + az*az) : 0.0f;
     const float gyroMagnitude = imuReady ? sqrtf(gx*gx + gy*gy + gz*gz) : 0.0f;
-    aiMonitor.update(haveFix, (float)hdop, satellites,
+    const bool positionUpdated = coordinatesAvailable && (millis() - lastCoordinateMs <= 1100);
+    aiMonitor.update(haveFix, (float)hdop, satellites, satellitesVisible,
       gsvSnrCount ? avgGsvSnr : NAN, gpsSpeedMps,
-      accelMagnitude, gyroMagnitude, false, lat, lng,
-      gps.location.isUpdated(), millis());
+      accelMagnitude, gyroMagnitude, imuReady, lat, lng,
+      positionUpdated, millis());
     logAiDatasetRow();
     writeSituationLog();
   }
