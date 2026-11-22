@@ -195,10 +195,6 @@ public:
       risk_ = "degrading";
     }
     if (mismatch_) risk_ = "integrity_warning";
-    if (profileEnabled_ && strcmp(profileRole_, "spoofing_signature") == 0) {
-      if (anomaly_) risk_ = "spoofing_signature_deviation";
-      else { risk_ = "spoofing_signature_match"; anomaly_ = true; anomalyCode_ = "spoofing_profile_match"; }
-    }
   }
 
   uint32_t samples() const { return samples_; }
