@@ -36,7 +36,11 @@ public:
   float profileScale(uint8_t i) const{return i<6?profileScale_[i]:1;}
   float profileThreshold() const{return profileThreshold_;}
   const char* profileRole() const{return profileRole_;}
-  void setLearningAllowed(bool allowed) { learningAllowed_ = allowed; }
+  void setLearningAllowed(bool allowed) { learningAllowed_ = allowed; if(!allowed) ++learningRejected_; }
+  bool learningAllowed() const { return learningAllowed_; }
+  uint32_t learningRejectedSamples() const { return learningRejected_; }
+  uint32_t learningProgress() const { uint32_t n=0; for(uint8_t i=0;i<6;i++) if(featureSamples_[i]>n)n=featureSamples_[i]; return n; }
+  uint32_t featureSamples(uint8_t i) const { return i<6?featureSamples_[i]:0; }
   void reset() {
     samples_ = 0;
     for (uint8_t i = 0; i < 6; ++i) {
@@ -222,6 +226,7 @@ public:
 private:
   bool profileEnabled_=false;
   bool learningAllowed_=true;
+  uint32_t learningRejected_=0;
   uint8_t profileMask_=0;
   float profileCenter_[6]={0,0,0,0,0,0},profileScale_[6]={1,1,1,1,1,1};
   float profileThreshold_=4.0f;
