@@ -1028,7 +1028,7 @@ try{
   document.getElementById('lngValue').textContent=lng.toFixed(6);
   document.getElementById('satValue').textContent=String(d.sat??0);
   document.getElementById('satVisibleValue').textContent=String(d.sat_visible??0);
-document.getElementById('gsvSnrValue').textContent=d.gsv_snr_count?Number(d.gsv_snr_avg).toFixed(1)+' dB-Hz ('+d.gsv_snr_count+')':'—';
+document.getElementById('gsvSnrValue').textContent=d.gsv_snr_count?Number(d.gsv_snr_avg).toFixed(1)+' дБ ('+d.gsv_snr_count+')':'—';
   document.getElementById('coords').textContent=hasCoords?lat.toFixed(6)+', '+lng.toFixed(6):'Координаты ещё не получены';
   currentFix=!!d.valid; currentCoordinatesAvailable=hasCoords;
   if(hasCoords){currentLat=lat;currentLng=lng;}
@@ -1094,10 +1094,11 @@ async function refreshSatellites(){
  const label=document.createElementNS(ns,'text');label.setAttribute('x',x+8);label.setAttribute('y',y-7);label.setAttribute('fill','#fff');label.setAttribute('font-size','9');label.setAttribute('class','sat-point');label.textContent=s.prn;svg.appendChild(label);
  });
  document.getElementById('satSummary').textContent='Видно: '+sats.length+' · Используется по GGA: '+d.used_gga;
- const bars=document.getElementById('snrBars');bars.innerHTML='';const max=Math.max(45,...sats.map(s=>Number(s.snr)||0)),bw=sats.length?Math.min(22,320/sats.length):18;
- sats.forEach((s,i)=>{const x=30+i*(320/Math.max(1,sats.length)),v=Number(s.snr)||0,h=v/max*125;
- const rect=document.createElementNS(ns,'rect');rect.setAttribute('x',x);rect.setAttribute('y',140-h);rect.setAttribute('width',Math.max(5,bw-3));rect.setAttribute('height',h);rect.setAttribute('rx','3');rect.setAttribute('fill',s.snr==null?'#64748b':v>=38?'#22c55e':v>=28?'#eab308':'#ef4444');bars.appendChild(rect);
- const t=document.createElementNS(ns,'text');t.setAttribute('x',x+bw/2);t.setAttribute('y','157');t.setAttribute('fill','#cbd5e1');t.setAttribute('font-size','9');t.setAttribute('text-anchor','middle');t.textContent=s.prn;bars.appendChild(t);});
+ const bars=document.getElementById('snrBars');bars.innerHTML='';
+ const max=50,left=42,right=350,top=18,bottom=172,plotH=bottom-top,plotW=right-left;
+ [0,10,20,30,40,50].forEach(v=>{const y=bottom-v/max*plotH;const line=document.createElementNS(ns,'line');line.setAttribute('x1',left);line.setAttribute('x2',right);line.setAttribute('y1',y);line.setAttribute('y2',y);line.setAttribute('stroke','#64748b');bars.appendChild(line);const t=document.createElementNS(ns,'text');t.setAttribute('x',left-7);t.setAttribute('y',y+3);t.setAttribute('fill','#cbd5e1');t.setAttribute('font-size','10');t.setAttribute('text-anchor','end');t.textContent=v;bars.appendChild(t);});
+ const axis=document.createElementNS(ns,'text');axis.setAttribute('x','5');axis.setAttribute('y','12');axis.setAttribute('fill','#cbd5e1');axis.setAttribute('font-size','10');axis.textContent='SNR, дБ';bars.appendChild(axis);
+ const bw=sats.length?Math.min(22,plotW/sats.length):18;sats.forEach((sat,i)=>{const x=left+(i+0.5)*(plotW/Math.max(1,sats.length)),v=sat.snr==null?0:Number(sat.snr),h=Math.max(0,Math.min(max,v))/max*plotH;const rect=document.createElementNS(ns,'rect');rect.setAttribute('x',x-bw/2);rect.setAttribute('y',bottom-h);rect.setAttribute('width',Math.max(4,bw-3));rect.setAttribute('height',h);rect.setAttribute('rx','2');rect.setAttribute('fill',sat.snr==null?'#64748b':v>=38?'#22c55e':v>=28?'#eab308':'#ef4444');bars.appendChild(rect);const t=document.createElementNS(ns,'text');t.setAttribute('x',x);t.setAttribute('y','188');t.setAttribute('fill','#cbd5e1');t.setAttribute('font-size','9');t.setAttribute('text-anchor','middle');t.textContent=sat.prn;bars.appendChild(t);});
  const list=document.getElementById('satelliteList');
  if(!sats.length){list.textContent='Спутники пока не получены. Ожидание GSV.';return;}
  list.innerHTML='<div style="display:grid;grid-template-columns:45px 40px 50px 50px 45px 1fr;gap:5px;font-size:12px"><b>Сист.</b><b>PRN</b><b>Выс.</b><b>Азим.</b><b>SNR</b><b>Статус</b>'+sats.map(s=>'<span>'+s.system+'</span><span>'+s.prn+'</span><span>'+s.elevation+'°</span><span>'+s.azimuth+'°</span><span>'+(s.snr??'—')+'</span><span>'+(s.used?'Используется':'Виден')+'</span>').join('')+'</div>';
