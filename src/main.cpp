@@ -538,6 +538,12 @@ String aiJson() {
   doc["model_training_mode"] = aiMonitor.offlineModelLoaded() ? "offline_robust_median_mad" : "online_welford_ram";
   doc["profile_role"] = aiMonitor.profileRole();
   doc["samples"] = aiMonitor.samples();
+  doc["learning_samples"] = aiMonitor.samples();
+  doc["learning_rejected"] = aiMonitor.learningRejectedSamples();
+  doc["learning_allowed"] = aiMonitor.learningAllowed();
+  doc["learning_progress"] = aiMonitor.learningProgress();
+  doc["feature_snr_samples"] = aiMonitor.featureSamples(2);
+  doc["feature_visible_samples"] = aiMonitor.featureSamples(5);
   doc["quality_score"] = aiMonitor.qualityScore();
   doc["risk"] = aiMonitor.risk();
   doc["motion"] = aiMonitor.motion();
@@ -604,6 +610,12 @@ String aiJson() {
       else{classification="position_deviation_with_weak_signal";verdict="ПОЗИЦИЯ ВНЕ КОНТРОЛЬНОЙ ЗОНЫ — СЛАБЫЙ ПРИЁМ";situation="Координаты вышли за допустимый радиус, качество приёма снижено.";reasons="Отклонение "+String(referenceDistance,1)+" м; спутников в решении: "+String(satellites)+"; средний SNR: "+String(avgGsvSnr,1)+" дБ.";}
     }else{classification="inside_reference";if(!aiMonitor.anomaly()){verdict="НОРМА — КООРДИНАТЫ В ДОПУСТИМОЙ ЗОНЕ";situation="Текущая позиция находится в пределах контрольного радиуса.";reasons="Отклонение "+String(referenceDistance,1)+" м из допустимых "+String(aiReferenceRadiusM,1)+" м. Качество сигналов оценивается отдельно.";}}
   }else if(!haveFix&&satellitesVisible>0&&avgGsvSnr>0&&avgGsvSnr<20.0f){classification="interference_possible";verdict="ВОЗМОЖНЫ ПОМЕХИ GNSS";situation="Фикс отсутствует, а наблюдаемый уровень сигналов низкий.";reasons="Возможны помехи или слабое покрытие; по NMEA нельзя доказать глушение.";}
+  if(aiReferenceEnabled&&!haveFix){
+    classification="no_fix_reference_pending";
+    if(aiMonitor.anomaly()){verdict="НЕТ FIX — ЕСТЬ ОТКЛОНЕНИЕ В ТЕЛЕМЕТРИИ";situation="Профиль приёма показывает статистическое отклонение, но координатную целостность проверить нельзя.";reasons="Отклонение: "+String(aiMonitor.anomalyCode())+"; score "+String(aiMonitor.maxZ(),2)+" σ. Расстояние до контрольной точки недоступно. Вывод предварительный: без FIX возможны ошибки и пропуски.";}
+    else if(avgGsvSnr<=0.0f){verdict="НЕТ FIX — НЕДОСТАТОЧНО ДАННЫХ ДЛЯ ВЫВОДА";situation="Контрольная точка задана, но без FIX расстояние вычислить нельзя; валидные измерения GSV SNR сейчас отсутствуют.";reasons="Видно спутников: "+String(satellitesVisible)+"; средний SNR: нет валидных измерений; проверка координат недоступна. Это не подтверждает норму и не исключает помехи или спуфинг.";} 
+    else{verdict="НЕТ FIX — ТЕЛЕМЕТРИЯ БЕЗ ЯВНЫХ ОТКЛОНЕНИЙ, ПОЗИЦИЯ НЕ ПРОВЕРЕНА";situation="Показатели доступной телеметрии сравниваются с профилем, но проверить соответствие реальной точке пока невозможно.";reasons="Видно спутников: "+String(satellitesVisible)+"; средний GSV SNR: "+String(avgGsvSnr,1)+" дБ. Расстояние до контрольной точки недоступно. Без FIX оценка предварительная и может содержать ошибки.";}
+  }
   doc["classification"]=classification;
   doc["situation"] = situation;
   doc["verdict"] = verdict;
@@ -792,6 +804,10 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <div class="metric"><span>Средний GSV SNR</span><strong id="aiSnr">—</strong></div>
 <div class="metric"><span>Тренд HDOP</span><strong id="aiHdopTrend">—</strong></div>
 <div class="metric"><span>Тренд SNR</span><strong id="aiSnrTrend">—</strong></div>
+<div class="metric"><span>Отклонение от контрольной точки</span><strong id="aiReferenceDistance">—</strong></div>
+<div class="metric"><span>Статус обучения</span><strong id="aiLearningStatus">—</strong></div>
+<div class="metric"><span>Принято / исключено</span><strong id="aiLearningCounts">—</strong></div>
+<div class="metric"><span>Наблюдения SNR / видимые спутники</span><strong id="aiFeatureCounts">—</strong></div>
 <pre id="aiDetails" class="coords">Модель собирает исходный профиль приёма…</pre>
 </div>
 <div id="deviceTab" class="hidden">
@@ -833,7 +849,7 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 
 <button class="gray" onclick="resetAiModel()">Сбросить профиль модели</button>
 <div class="card"><h3>Профиль: импорт / экспорт</h3><a href="/ai/profile" style="color:#8ab4ff">Скачать профиль JSON</a><p><input id="aiProfileFile" type="file" accept=".json,application/json"></p><button onclick="uploadAiProfile()">Загрузить профиль</button><div id="aiProfileStatus" class="small"></div></div>
-<div class="card"><h3>Контрольная точка навигации</h3><div class="small">Сравнивает текущий FIX с реальной точкой. Координаты сохраняются в настройках устройства, но не в JSON-профиле и не в коде. Рекомендуемый радиус 30–50 м.</div><label>Широта</label><input id="trainRefLat" type="number" step="0.000001"><label>Долгота</label><input id="trainRefLon" type="number" step="0.000001"><label>Допуск, м</label><input id="trainRadius" type="number" min="5" max="5000" value="50"><button onclick="saveAiReference()">Сохранить контрольную точку</button><button class="gray" onclick="clearAiReference()">Отключить контрольную точку</button><div id="referenceStatus" class="small">Загрузка…</div><pre id="trainCommand" class="coords"></pre></div>
+<div class="card"><h3>Контрольная точка навигации</h3><div class="small">Сравнивает текущий FIX с реальной точкой. Координаты сохраняются в настройках устройства, но не в JSON-профиле и не в коде. Рекомендуемый радиус 30–50 м.</div><label>Реальные координаты (широта, долгота)</label><input id="trainRefPoint" type="text" inputmode="decimal" placeholder="59.996711, 30.304204" autocomplete="off"><label>Допуск, м</label><input id="trainRadius" type="number" min="5" max="5000" value="50"><button onclick="saveAiReference()">Сохранить контрольную точку</button><button class="gray" onclick="clearAiReference()">Отключить контрольную точку</button><div id="referenceStatus" class="small">Загрузка…</div><pre id="trainCommand" class="coords"></pre></div>
 <div class="card"><h3>Журнал обстановки и интервал сообщений</h3><label for="reportInterval">Интервал (10 секунд — 30 минут)</label><select id="reportInterval"><option value="10">10 секунд</option><option value="30">30 секунд</option><option value="60">1 минута</option><option value="300" selected>5 минут — рекомендуется</option><option value="600">10 минут</option><option value="900">15 минут</option><option value="1800">30 минут</option></select><button onclick="saveReportInterval()">Применить интервал</button><div class="ubx-actions"><button onclick="setSituationLogging(true)">Начать журнал</button><button class="gray" onclick="setSituationLogging(false)">Остановить журнал</button><a href="/ai/situation-log" style="color:#8ab4ff;padding:10px">Скачать журнал</a></div><div id="situationLogStatus" class="small">Журнал остановлен</div></div>
 <div class="ubx-actions"><button onclick="setAiLogging(true)">Начать подробную запись CSV</button><button class="gray" onclick="setAiLogging(false)">Остановить запись CSV</button><a href="/ai/dataset" style="color:#8ab4ff;padding:10px">Скачать CSV</a></div><div id="aiLogStatus" class="small">Запись набора данных выключена</div>
 <div class="small">Локальная статистическая ML-модель с онлайн-обучением. Отклонения не доказывают глушение или spoofing. GSV SNR — приближённый уровень сигнала, не калиброванный C/N₀.</div>
@@ -1487,7 +1503,7 @@ async function refreshAi(){
     const labels={learning:'Накопление профиля',normal:'Норма',degrading:'Качество ухудшается',anomaly:'Статистическое отклонение',integrity_warning:'Несоответствие скорости и перемещения GNSS',spoofing_suspected:'Подозрение на спуфинг',position_deviation_with_weak_signal:'Отклонение позиции при слабом сигнале',interference_possible:'Возможны помехи GNSS',inside_reference:'В контрольной зоне',no_fix:'Нет фикса',limited_data:'Недостаточно данных',unknown:'Неизвестно'};
     const motion={moving:'Движение (по GNSS)',vibration:'Вибрация / динамика',rotation:'Вращение',stationary_or_low_dynamics:'Покой или низкая динамика',imu_unavailable:'IMU недоступен',uncertain:'Неопределённо',unknown:'Неизвестно'};
     document.getElementById('aiStatus').textContent=d.reference_enabled?'Контрольная зона активна · радиус '+Number(d.reference_radius_m).toFixed(0)+' м':'Модель активна · контрольная точка не задана';
-    const refStatus=document.getElementById('referenceStatus');if(refStatus){refStatus.textContent=d.reference_enabled?'Задано · '+Number(d.reference_lat).toFixed(6)+', '+Number(d.reference_lon).toFixed(6)+' · радиус '+Number(d.reference_radius_m).toFixed(0)+' м':'Контрольная точка не задана';if(d.reference_enabled){document.getElementById('trainRefLat').value=d.reference_lat;document.getElementById('trainRefLon').value=d.reference_lon;document.getElementById('trainRadius').value=d.reference_radius_m;}}
+    const refStatus=document.getElementById('referenceStatus');if(refStatus){refStatus.textContent=d.reference_enabled?'Задано · '+Number(d.reference_lat).toFixed(6)+', '+Number(d.reference_lon).toFixed(6)+' · радиус '+Number(d.reference_radius_m).toFixed(0)+' м':'Контрольная точка не задана';if(d.reference_enabled){document.getElementById('trainRefPoint').value=Number(d.reference_lat).toFixed(6)+', '+Number(d.reference_lon).toFixed(6);document.getElementById('trainRadius').value=d.reference_radius_m;}}
     document.getElementById('aiScore').textContent=d.quality_score>=0?d.quality_score+'/100':'—';
     document.getElementById('aiRisk').textContent=labels[d.risk]||d.risk;
     document.getElementById('aiSamples').textContent=String(d.samples);
@@ -1497,6 +1513,10 @@ async function refreshAi(){
     document.getElementById('aiSnr').textContent=d.avg_gsv_snr>0?Number(d.avg_gsv_snr).toFixed(1)+' дБ ('+d.snr_satellites+' спутн.)':'Нет данных';
     document.getElementById('aiHdopTrend').textContent=Number(d.hdop_trend).toFixed(2);
     document.getElementById('aiSnrTrend').textContent=Number(d.snr_trend).toFixed(1);
+    const dist=document.getElementById('aiReferenceDistance');if(dist)dist.textContent=!d.reference_enabled?'Контрольная точка не задана':(d.reference_distance_m>=0?Number(d.reference_distance_m).toFixed(1)+' м (допуск '+Number(d.reference_radius_m).toFixed(0)+' м)': 'Недоступно — нет актуального FIX');
+    const learn=document.getElementById('aiLearningStatus');if(learn)learn.textContent=!d.learning_allowed?'Пауза: позиция вне контрольного радиуса':(d.trained?(d.offline_model_loaded?'Профиль активен · адаптация идёт':'Базовый профиль сформирован'):'Сбор данных · '+Math.min(12,Number(d.learning_progress||0))+'/12');
+    const counts=document.getElementById('aiLearningCounts');if(counts)counts.textContent=Number(d.learning_samples||0)+' / '+Number(d.learning_rejected||0);
+    const feats=document.getElementById('aiFeatureCounts');if(feats)feats.textContent=Number(d.feature_snr_samples||0)+' / '+Number(d.feature_visible_samples||0);
     document.getElementById('aiSituation').textContent=d.situation||'Сбор телеметрии…';
     document.getElementById('aiVerdict').textContent=d.verdict||'Недостаточно данных для заключения';
     document.getElementById('aiReasons').textContent=d.reasons||'';
@@ -1518,8 +1538,8 @@ async function uploadAiProfile(){
   catch(e){status.textContent='Ошибка импорта: '+e.message;}
 }
 async function saveAiReference(){
- const a=document.getElementById('trainRefLat').value,b=document.getElementById('trainRefLon').value,r=Number(document.getElementById('trainRadius').value||50),status=document.getElementById('referenceStatus');
- if(!a||!b||!Number.isFinite(Number(a))||!Number.isFinite(Number(b))||Math.abs(Number(a))>90||Math.abs(Number(b))>180||r<5||r>5000){status.textContent='Проверьте координаты и радиус 5–5000 м';return;}
+ const raw=document.getElementById('trainRefPoint').value.trim(),parts=raw.split(/[,;\\s]+/).filter(Boolean),a=parts[0],b=parts[1],r=Number(document.getElementById('trainRadius').value||50),status=document.getElementById('referenceStatus');
+ if(parts.length!==2||!Number.isFinite(Number(a))||!Number.isFinite(Number(b))||Math.abs(Number(a))>90||Math.abs(Number(b))>180||r<5||r>5000){status.textContent='Введите координаты одной строкой: 59.996711, 30.304204; радиус 5–5000 м';return;}
  try{const q=new URLSearchParams({lat:a,lon:b,radius:String(r)});const res=await fetch('/ai/reference?'+q,{method:'POST'});const d=await res.json();if(!res.ok)throw new Error(d.error||'Ошибка');status.textContent=d.message||'Сохранено';refreshAi();}catch(e){status.textContent='Ошибка: '+e.message;}
 }
 async function clearAiReference(){try{const r=await fetch('/ai/reference/clear',{method:'POST'});if(!r.ok)throw new Error('HTTP '+r.status);document.getElementById('referenceStatus').textContent='Контрольная точка отключена';refreshAi();}catch(e){document.getElementById('referenceStatus').textContent='Ошибка: '+e.message;}}
@@ -2786,7 +2806,7 @@ void loop() {
     const float accelMagnitude = imuReady ? sqrtf(ax*ax + ay*ay + az*az) : 0.0f;
     const float gyroMagnitude = imuReady ? sqrtf(gx*gx + gy*gy + gz*gz) : 0.0f;
     const bool positionUpdated = coordinatesAvailable && (millis() - lastCoordinateMs <= 1100);
-    const bool trustedForLearning = !aiReferenceEnabled || (haveFix && coordinatesAvailable && aiDistanceMeters(aiReferenceLat,aiReferenceLon,lat,lng) <= aiReferenceRadiusM);
+    const bool trustedForLearning = !aiReferenceEnabled || !haveFix || !coordinatesAvailable || aiDistanceMeters(aiReferenceLat,aiReferenceLon,lat,lng) <= aiReferenceRadiusM;
     aiMonitor.setLearningAllowed(trustedForLearning);
     aiMonitor.update(haveFix, (float)hdop, satellites, satellitesVisible,
       gsvSnrCount ? avgGsvSnr : NAN, gpsSpeedMps,
