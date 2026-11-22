@@ -833,7 +833,7 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 
 <button class="gray" onclick="resetAiModel()">Сбросить профиль модели</button>
 <div class="card"><h3>Профиль: импорт / экспорт</h3><a href="/ai/profile" style="color:#8ab4ff">Скачать профиль JSON</a><p><input id="aiProfileFile" type="file" accept=".json,application/json"></p><button onclick="uploadAiProfile()">Загрузить профиль</button><div id="aiProfileStatus" class="small"></div></div>
-<div class="card"><h3>Контрольная точка для обучения</h3><div class="small">Координаты используются только скриптом на компьютере для отбора строк CSV и не сохраняются в прошивке или профиле. Рекомендуемый радиус: 30–50 м.</div><label>Широта</label><input id="trainRefLat" type="number" step="0.000001"><label>Долгота</label><input id="trainRefLon" type="number" step="0.000001"><label>Радиус, м</label><input id="trainRadius" type="number" min="1" max="500" value="50"><button onclick="makeTrainCommand()">Сформировать команду обучения</button><pre id="trainCommand" class="coords"></pre></div>
+<div class="card"><h3>Контрольная точка навигации</h3><div class="small">Сравнивает текущий FIX с реальной точкой. Координаты сохраняются в настройках устройства, но не в JSON-профиле и не в коде. Рекомендуемый радиус 30–50 м.</div><label>Широта</label><input id="trainRefLat" type="number" step="0.000001"><label>Долгота</label><input id="trainRefLon" type="number" step="0.000001"><label>Допуск, м</label><input id="trainRadius" type="number" min="5" max="5000" value="50"><button onclick="saveAiReference()">Сохранить контрольную точку</button><button class="gray" onclick="clearAiReference()">Отключить контрольную точку</button><div id="referenceStatus" class="small">Загрузка…</div><pre id="trainCommand" class="coords"></pre></div>
 <div class="card"><h3>Журнал обстановки и интервал сообщений</h3><label for="reportInterval">Интервал (10 секунд — 30 минут)</label><select id="reportInterval"><option value="10">10 секунд</option><option value="30">30 секунд</option><option value="60">1 минута</option><option value="300" selected>5 минут — рекомендуется</option><option value="600">10 минут</option><option value="900">15 минут</option><option value="1800">30 минут</option></select><button onclick="saveReportInterval()">Применить интервал</button><div class="ubx-actions"><button onclick="setSituationLogging(true)">Начать журнал</button><button class="gray" onclick="setSituationLogging(false)">Остановить журнал</button><a href="/ai/situation-log" style="color:#8ab4ff;padding:10px">Скачать журнал</a></div><div id="situationLogStatus" class="small">Журнал остановлен</div></div>
 <div class="ubx-actions"><button onclick="setAiLogging(true)">Начать подробную запись CSV</button><button class="gray" onclick="setAiLogging(false)">Остановить запись CSV</button><a href="/ai/dataset" style="color:#8ab4ff;padding:10px">Скачать CSV</a></div><div id="aiLogStatus" class="small">Запись набора данных выключена</div>
 <div class="small">Локальная статистическая ML-модель с онлайн-обучением. Отклонения не доказывают глушение или spoofing. GSV SNR — приближённый уровень сигнала, не калиброванный C/N₀.</div>
@@ -1484,9 +1484,10 @@ document.getElementById('imuData').textContent=
 async function refreshAi(){
   try{
     const d=await (await fetch('/ai/status?ts='+Date.now())).json();
-    const labels={learning:'Накопление профиля',normal:'Норма',degrading:'Качество ухудшается',anomaly:'Статистическое отклонение',integrity_warning:'Несоответствие скорости и перемещения GNSS',spoofing_signature_match:'Совпадение с сигнатурой спуфинга',spoofing_signature_deviation:'Отклонение от сигнатуры спуфинга',no_fix:'Нет фикса',limited_data:'Недостаточно данных',unknown:'Неизвестно'};
+    const labels={learning:'Накопление профиля',normal:'Норма',degrading:'Качество ухудшается',anomaly:'Статистическое отклонение',integrity_warning:'Несоответствие скорости и перемещения GNSS',spoofing_suspected:'Подозрение на спуфинг',position_deviation_with_weak_signal:'Отклонение позиции при слабом сигнале',interference_possible:'Возможны помехи GNSS',inside_reference:'В контрольной зоне',no_fix:'Нет фикса',limited_data:'Недостаточно данных',unknown:'Неизвестно'};
     const motion={moving:'Движение (по GNSS)',vibration:'Вибрация / динамика',rotation:'Вращение',stationary_or_low_dynamics:'Покой или низкая динамика',imu_unavailable:'IMU недоступен',uncertain:'Неопределённо',unknown:'Неизвестно'};
-    document.getElementById('aiStatus').textContent='Модель активна · роль профиля: '+(d.profile_role==='spoofing_signature'?'сигнатура спуфинга':'нормальный эталон');
+    document.getElementById('aiStatus').textContent=d.reference_enabled?'Контрольная зона активна · радиус '+Number(d.reference_radius_m).toFixed(0)+' м':'Модель активна · контрольная точка не задана';
+    const refStatus=document.getElementById('referenceStatus');if(refStatus){refStatus.textContent=d.reference_enabled?'Задано · '+Number(d.reference_lat).toFixed(6)+', '+Number(d.reference_lon).toFixed(6)+' · радиус '+Number(d.reference_radius_m).toFixed(0)+' м':'Контрольная точка не задана';if(d.reference_enabled){document.getElementById('trainRefLat').value=d.reference_lat;document.getElementById('trainRefLon').value=d.reference_lon;document.getElementById('trainRadius').value=d.reference_radius_m;}}
     document.getElementById('aiScore').textContent=d.quality_score>=0?d.quality_score+'/100':'—';
     document.getElementById('aiRisk').textContent=labels[d.risk]||d.risk;
     document.getElementById('aiSamples').textContent=String(d.samples);
@@ -1501,6 +1502,7 @@ async function refreshAi(){
     document.getElementById('aiReasons').textContent=d.reasons||'';
     const interval=document.getElementById('reportInterval'); if(interval && !interval.dataset.loaded){interval.value=String(d.report_interval_seconds||300);interval.dataset.loaded='1';}
     document.getElementById('situationLogStatus').textContent=d.situation_logging?'Журнал ведётся':'Журнал остановлен';
+    const csvStatus=document.getElementById('aiLogStatus');if(csvStatus)csvStatus.textContent=d.logging_enabled?'Запись включена: /ai_dataset.csv':'Запись остановлена';
     document.getElementById('aiDetails').textContent='Модель: '+d.model_type+
       '\nКод отклонения: '+d.anomaly_code+
       '\nМаксимальное отклонение: '+Number(d.max_z_score).toFixed(2)+' σ'+
@@ -1515,11 +1517,12 @@ async function uploadAiProfile(){
   try{const body=await input.files[0].text();const r=await fetch('/ai/profile',{method:'POST',headers:{'Content-Type':'application/json'},body});const d=await r.json();if(!r.ok)throw new Error(d.error||'Ошибка');status.textContent=d.message||'Профиль загружен';refreshAi();}
   catch(e){status.textContent='Ошибка импорта: '+e.message;}
 }
-function makeTrainCommand(){
-  const a=document.getElementById('trainRefLat').value,b=document.getElementById('trainRefLon').value,r=Number(document.getElementById('trainRadius').value||50);
-  if(!a||!b||!Number.isFinite(Number(a))||!Number.isFinite(Number(b))||Math.abs(Number(a))>90||Math.abs(Number(b))>180||r<1||r>500){document.getElementById('trainCommand').textContent='Проверьте координаты и радиус';return;}
-  document.getElementById('trainCommand').textContent='python scripts/train_ai_model.py ai_dataset.csv --reference-lat '+a+' --reference-lon '+b+' --radius-m '+r;
+async function saveAiReference(){
+ const a=document.getElementById('trainRefLat').value,b=document.getElementById('trainRefLon').value,r=Number(document.getElementById('trainRadius').value||50),status=document.getElementById('referenceStatus');
+ if(!a||!b||!Number.isFinite(Number(a))||!Number.isFinite(Number(b))||Math.abs(Number(a))>90||Math.abs(Number(b))>180||r<5||r>5000){status.textContent='Проверьте координаты и радиус 5–5000 м';return;}
+ try{const q=new URLSearchParams({lat:a,lon:b,radius:String(r)});const res=await fetch('/ai/reference?'+q,{method:'POST'});const d=await res.json();if(!res.ok)throw new Error(d.error||'Ошибка');status.textContent=d.message||'Сохранено';refreshAi();}catch(e){status.textContent='Ошибка: '+e.message;}
 }
+async function clearAiReference(){try{const r=await fetch('/ai/reference/clear',{method:'POST'});if(!r.ok)throw new Error('HTTP '+r.status);document.getElementById('referenceStatus').textContent='Контрольная точка отключена';refreshAi();}catch(e){document.getElementById('referenceStatus').textContent='Ошибка: '+e.message;}}
 async function setAiLogging(enabled){
   try{
     const r=await fetch('/ai/logging?enabled='+(enabled?'1':'0'),{method:'POST'});
