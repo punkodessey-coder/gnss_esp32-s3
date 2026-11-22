@@ -19,6 +19,7 @@
 #include <esp_image_format.h>
 #include <esp_app_desc.h>
 #include <esp_system.h>
+#include "firmware_build_info.h"
 
 #ifndef FIRMWARE_GIT_SHA
 #define FIRMWARE_GIT_SHA "local"

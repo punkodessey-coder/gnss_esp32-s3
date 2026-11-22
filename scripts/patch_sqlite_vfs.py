@@ -5,9 +5,15 @@ Import("env")
 import os
 import re
 
-# Embed the exact Git revision in the device diagnostics.
+# Embed the exact Git revision through a generated header. Passing a quoted
+# string via CPPDEFINES is not portable across SCons/PlatformIO toolchains.
 git_sha = os.environ.get('GITHUB_SHA', 'local')
-env.Append(CPPDEFINES=[('FIRMWARE_GIT_SHA', '"%s"' % git_sha)])
+project_dir = env.subst("$PROJECT_DIR")
+include_dir = os.path.join(project_dir, "include")
+os.makedirs(include_dir, exist_ok=True)
+header_path = os.path.join(include_dir, "firmware_build_info.h")
+with open(header_path, "w", encoding="utf-8") as header:
+    header.write('#pragma once\\n#define FIRMWARE_GIT_SHA "' + git_sha + '"\\n')
 
 libdeps = env.subst("$PROJECT_LIBDEPS_DIR")
 pioenv = env.subst("$PIOENV")
