@@ -1731,7 +1731,7 @@ void writeSituationLog() {
   lastSituationLogMs=now;
   File file=SD_MMC.open("/situation_log.csv",FILE_APPEND);if(!file)return;
   const time_t epoch=time(nullptr);const bool timeValid=epoch>1700000000;
-  char localStamp[24]="Нет синхронизации",utcStamp[24]="—";
+  char localStamp[48]="Нет синхронизации",utcStamp[24]="—";
   if(timeValid){struct tm local,utc;localtime_r(&epoch,&local);gmtime_r(&epoch,&utc);strftime(localStamp,sizeof(localStamp),"%d.%m.%Y %H:%M:%S",&local);strftime(utcStamp,sizeof(utcStamp),"%d.%m.%Y %H:%M:%S",&utc);}
   if(file.size()==0)file.println("№;Дата и время;Время UTC;Время синхронизировано;Координаты получены;Широта;Долгота;Источник координат;FIX;Спутников в решении;Спутников видно;HDOP;Средний уровень сигнала, дБ-Гц;Скорость, м/с;Статистическое отклонение;Несоответствие скорости и перемещения;Заключение;Причины");
   String verdict=haveFix?"FIX подтверждён":"Нет FIX",reasons;
@@ -2289,7 +2289,7 @@ static void firmwareUploadData(const uint8_t* data,size_t length) {
   if(firmwareUploadError.length()||!length)return;
   if(!firmwareUploadIsZip){
     if(!firmwareUploadStarted){if(!Update.begin(UPDATE_SIZE_UNKNOWN,U_FLASH)){firmwareUploadFail("Update.begin failed, code "+String(Update.getError()));return;}firmwareUploadStarted=true;}
-    size_t written=Update.write(data,length);if(written!=length){firmwareUploadFail("Ошибка записи BIN, код "+String(Update.getError()));return;}firmwareUploadBytes+=written;return;
+    size_t written=Update.write(const_cast<uint8_t*>(data),length);if(written!=length){firmwareUploadFail("Ошибка записи BIN, код "+String(Update.getError()));return;}firmwareUploadBytes+=written;return;
   }
   size_t offset=0;
   while(offset<length&&!firmwareUploadError.length()){
@@ -2304,7 +2304,7 @@ static void firmwareUploadData(const uint8_t* data,size_t length) {
       continue;
     }
     size_t count=min(length-offset,(size_t)firmwareZipRemaining);if(!count)break;
-    size_t written=Update.write(data+offset,count);if(written!=count){firmwareUploadFail("Ошибка записи BIN из ZIP, код "+String(Update.getError()));break;}
+    size_t written=Update.write(const_cast<uint8_t*>(data+offset),count);if(written!=count){firmwareUploadFail("Ошибка записи BIN из ZIP, код "+String(Update.getError()));break;}
     firmwareZipCrc=zipCrc32Update(firmwareZipCrc,data+offset,count);firmwareUploadBytes+=written;firmwareZipRemaining-=(uint32_t)count;offset+=count;
   }
 }
