@@ -5,6 +5,10 @@ Import("env")
 import os
 import re
 
+# Embed the exact Git revision in the device diagnostics.
+git_sha = os.environ.get('GITHUB_SHA', 'local')
+env.Append(CPPDEFINES=[('FIRMWARE_GIT_SHA', '"%s"' % git_sha)])
+
 libdeps = env.subst("$PROJECT_LIBDEPS_DIR")
 pioenv = env.subst("$PIOENV")
 candidates = [

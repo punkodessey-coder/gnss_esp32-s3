@@ -13,6 +13,16 @@
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
+#include <Update.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
+#include <esp_image_format.h>
+#include <esp_app_desc.h>
+#include <esp_system.h>
+
+#ifndef FIRMWARE_GIT_SHA
+#define FIRMWARE_GIT_SHA "local"
+#endif
 
 const char* AP_SSID = "ESP32-GPS";
 const char* AP_PASS = "12345678";
@@ -68,6 +78,9 @@ Arduino_DataBus *displayBus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD
 Arduino_GFX *gfx = new Arduino_ST7789(displayBus, LCD_RST, 1, true, LCD_WIDTH, LCD_HEIGHT, 34, 0, 34, 0);
 SensorQMI8658 imu;
 WebServer server(80);
+bool firmwareUploadOk = false;
+String firmwareUploadError;
+size_t firmwareUploadBytes = 0;
 Preferences preferences;
 
 bool haveFix = false;
@@ -543,7 +556,7 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <button id="tabUbxBtn" class="tab" onclick="showTab('ubx')">u-blox</button>
 <button id="tabPointsBtn" class="tab" onclick="showTab('points')">Точки</button>
 <button id="tabAiBtn" class="tab" onclick="showTab('ai')">AI / ML</button>
-<button id="tabSystemBtn" class="tab" onclick="showTab('system')">Система / перезагрузка</button>
+<button id="tabDeviceBtn" class="tab" onclick="showTab('device')">Устройство</button>
 </div></div>
 <main class="app-content">
 <div id="gpsTab">
@@ -624,7 +637,29 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <details><summary>Последний ответ приёмника (диагностика)</summary><pre id="ubxFrame" class="coords">—</pre></details>
 </section></div></div></div>
 <div id="pointsTab" class="hidden"><div class="card"><h2>Сохранённые точки</h2><div class="small">Название и координаты сохранённых местоположений</div><div id="savedPointsList" class="small">Загрузка…</div></div></div>
-<div id="systemTab" class="hidden"><div class="card"><h2>Управление устройством</h2><p>Перезапуск контроллера ESP32-S3. Данные и файлы microSD не удаляются.</p><button class="danger" onclick="rebootDevice()">Перезагрузить ESP32</button><div id="rebootStatus" class="small">Контроллер работает</div></div></div>
+<div id="deviceTab" class="hidden">
+<div class="card">
+<h2>Устройство — сведения о прошивке</h2>
+<div id="firmwareInfo" class="coords">Загрузка сведений…</div>
+<button class="gray" onclick="loadFirmwareInfo()">Обновить сведения</button>
+<button onclick="downloadCurrentFirmware()">Выгрузить установленную прошивку (.bin)</button>
+<div class="small">Сохраняется точный образ запущенного приложения. Файл можно использовать как резервную копию.</div>
+</div>
+<div class="card">
+<h2>Загрузка новой прошивки</h2>
+<p>Выберите бинарный файл .bin, собранный для этой платы ESP32-S3. Во время обновления не отключайте питание и не закрывайте страницу.</p>
+<input id="firmwareFile" type="file" accept=".bin,application/octet-stream">
+<div><button onclick="uploadFirmware()">Загрузить и установить прошивку</button></div>
+<progress id="firmwareProgress" max="100" value="0" style="width:100%;margin-top:12px"></progress>
+<div id="firmwareUploadStatus" class="small">Ожидание файла</div>
+</div>
+<div class="card">
+<h2>Перезагрузка</h2>
+<p>Перезапуск контроллера ESP32-S3. Данные и файлы microSD не удаляются.</p>
+<button class="danger" onclick="rebootDevice()">Перезагрузить ESP32</button>
+<div id="rebootStatus" class="small">Контроллер работает</div>
+</div>
+</div>
 <div id="aiTab" class="hidden">
 <div class="card">
 <h2>AI / ML — мониторинг навигации</h2>
@@ -670,8 +705,8 @@ let followGps=true, mapLoadToken=0, mapTilesLoaded=0, mapTilesFailed=0;
 function toggleMenu(){document.getElementById('mainMenu').classList.toggle('open');}
 function showTab(name){
 document.getElementById('mainMenu').classList.remove('open');
-document.getElementById('systemTab').classList.toggle('hidden',name!=='system');
-document.getElementById('tabSystemBtn').classList.toggle('active',name==='system');
+document.getElementById('deviceTab').classList.toggle('hidden',name!=='device');
+document.getElementById('tabDeviceBtn').classList.toggle('active',name==='device');
 document.getElementById('gpsTab').classList.toggle('hidden',name!=='gps');
 document.getElementById('imuTab').classList.toggle('hidden',name!=='imu');
 document.getElementById('testsTab').classList.toggle('hidden',name!=='tests');
@@ -689,7 +724,7 @@ if(name==='gps'){
   if(yandexMap) setTimeout(()=>yandexMap.container.fitToViewport(),150);
 }
 if(name==='tests') refreshUart();
-if(name==='system') document.getElementById('rebootStatus').textContent='Контроллер работает';
+if(name==='device'){document.getElementById('rebootStatus').textContent='Контроллер работает';loadFirmwareInfo();}
 if(name==='ubx' && !document.getElementById('ubxFields').children.length) selectUbxPage('gnss');
 }
 
@@ -908,6 +943,29 @@ document.getElementById('gsvSnrValue').textContent=d.gsv_snr_count?Number(d.gsv_
   if(yandexMap) updateYandexPoint(lat,lng);
   else if(map) updateLeafletPoint(lat,lng);
 }catch(e){}
+}
+async function loadFirmwareInfo(){
+ const out=document.getElementById('firmwareInfo');out.textContent='Чтение данных устройства…';
+ try{
+  const r=await fetch('/firmware/info?ts='+Date.now(),{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);
+  const d=await r.json();
+  const rows=[['Версия прошивки',d.firmware_version],['Версия приложения',d.app_version],['Дата сборки',d.build_date+' '+d.build_time],['Git commit',d.git_commit],['Проект',d.project],['SHA-256 ELF',d.elf_sha256],['Чип',d.chip_model+' rev.'+d.chip_revision+' / '+d.cores+' ядра'],['Частота CPU',d.cpu_mhz+' МГц'],['Flash',d.flash_size_bytes+' байт; '+d.flash_speed_hz+' Гц; режим '+d.flash_mode],['PSRAM',d.psram_size_bytes+' байт'],['Размер образа',d.image_size_bytes+' байт'],['Раздел приложения',d.partition_label+' @ 0x'+Number(d.partition_address).toString(16)],['Heap свободно / минимум',d.free_heap_bytes+' / '+d.min_free_heap_bytes+' байт'],['Максимальный блок heap',d.largest_heap_block_bytes+' байт'],['Свободно под OTA',d.free_sketch_bytes+' байт'],['MAC Wi-Fi',d.mac],['SDK',d.sdk_version],['Причина последнего сброса',d.reset_reason],['Время после запуска',Math.floor(d.uptime_ms/1000)+' с']];
+  out.textContent=rows.map(x=>x[0]+': '+(x[1]===undefined||x[1]===null?'—':x[1])).join('\n');
+ }catch(e){out.textContent='Не удалось получить сведения: '+e.message;}
+}
+function downloadCurrentFirmware(){window.location.href='/firmware/download';}
+function uploadFirmware(){
+ const input=document.getElementById('firmwareFile'),status=document.getElementById('firmwareUploadStatus'),progress=document.getElementById('firmwareProgress');
+ if(!input.files||!input.files.length){status.textContent='Сначала выберите файл .bin';return;}
+ const file=input.files[0];if(!file.name.toLowerCase().endsWith('.bin')){status.textContent='Нужен бинарный файл .bin';return;}
+ if(!confirm('Установить '+file.name+' ('+file.size+' байт)? ESP32 перезагрузится.'))return;
+ const data=new FormData();data.append('firmware',file,file.name);
+ const xhr=new XMLHttpRequest();xhr.open('POST','/firmware/update');xhr.timeout=180000;
+ xhr.upload.onprogress=e=>{if(e.lengthComputable){const p=Math.round(e.loaded/e.total*100);progress.value=p;status.textContent='Передача: '+p+'% ('+e.loaded+' / '+e.total+' байт)';}};
+ xhr.onload=()=>{let msg=xhr.responseText;try{const d=JSON.parse(msg);msg=d.message||d.error||msg;}catch(e){}if(xhr.status>=200&&xhr.status<300){progress.value=100;status.textContent='Прошивка проверена и записана. ESP32 перезагружается; переподключитесь через 15–30 секунд.';}else status.textContent='Ошибка обновления HTTP '+xhr.status+': '+msg;};
+ xhr.onerror=()=>status.textContent='Потеряна связь во время загрузки. Проверьте устройство.';
+ xhr.ontimeout=()=>status.textContent='Истекло время ожидания загрузки.';
+ progress.value=0;status.textContent='Подготовка обновления…';xhr.send(data);
 }
 async function rebootDevice(){
  const out=document.getElementById('rebootStatus');
@@ -1876,6 +1934,109 @@ void handleSimulatorStop() {
   server.send(200, "application/json", "{\"ok\":true,\"enabled\":false}");
 }
 
+static String firmwareResetReason() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "Power-on";
+    case ESP_RST_EXT: return "External reset";
+    case ESP_RST_SW: return "Software reset";
+    case ESP_RST_PANIC: return "Panic / exception";
+    case ESP_RST_INT_WDT: return "Interrupt watchdog";
+    case ESP_RST_TASK_WDT: return "Task watchdog";
+    case ESP_RST_WDT: return "Other watchdog";
+    case ESP_RST_DEEPSLEEP: return "Deep sleep";
+    case ESP_RST_BROWNOUT: return "Brownout";
+    case ESP_RST_SDIO: return "SDIO reset";
+    default: return "Unknown (" + String((int)esp_reset_reason()) + ")";
+  }
+}
+
+void handleFirmwareInfo() {
+  JsonDocument doc;
+  const esp_app_desc_t* app = esp_app_get_description();
+  const esp_partition_t* part = esp_ota_get_running_partition();
+  esp_image_metadata_t meta = {};
+  uint32_t imageSize = ESP.getSketchSize();
+  if (part) {
+    esp_partition_pos_t pos = {part->address, part->size};
+    if (esp_image_get_metadata(&pos, &meta) == ESP_OK) imageSize = meta.image_len;
+  }
+  char hash[65] = {0};
+  if (app) {
+    for (int i=0;i<32;i++) snprintf(hash+i*2,3,"%02x",app->app_elf_sha256[i]);
+    doc["app_version"]=app->version; doc["build_date"]=app->date; doc["build_time"]=app->time;
+    doc["project"]=app->project_name; doc["idf_version"]=app->idf_ver;
+  }
+  doc["firmware_version"]="1.1.0"; doc["git_commit"]=FIRMWARE_GIT_SHA; doc["elf_sha256"]=hash;
+  doc["chip_model"]=ESP.getChipModel(); doc["chip_revision"]=ESP.getChipRevision();
+  doc["cores"]=ESP.getChipCores(); doc["cpu_mhz"]=ESP.getCpuFreqMHz();
+  doc["flash_size_bytes"]=ESP.getFlashChipSize(); doc["flash_speed_hz"]=ESP.getFlashChipSpeed();
+  doc["flash_mode"]=(int)ESP.getFlashChipMode(); doc["psram_size_bytes"]=ESP.getPsramSize();
+  doc["image_size_bytes"]=imageSize; doc["partition_label"]=part?part->label:"unknown";
+  doc["partition_address"]=part?part->address:0; doc["partition_size_bytes"]=part?part->size:0;
+  doc["free_heap_bytes"]=ESP.getFreeHeap(); doc["min_free_heap_bytes"]=ESP.getMinFreeHeap();
+  doc["largest_heap_block_bytes"]=ESP.getMaxAllocHeap(); doc["free_sketch_bytes"]=ESP.getFreeSketchSpace();
+  doc["sketch_md5"]=ESP.getSketchMD5(); doc["mac"]=WiFi.macAddress(); doc["sdk_version"]=ESP.getSdkVersion();
+  doc["reset_reason"]=firmwareResetReason(); doc["uptime_ms"]=millis();
+  String json; serializeJson(doc,json); server.sendHeader("Cache-Control","no-store");
+  server.send(200,"application/json; charset=utf-8",json);
+}
+
+void handleFirmwareDownload() {
+  const esp_partition_t* part=esp_ota_get_running_partition();
+  if(!part){server.send(500,"text/plain","Running application partition not found");return;}
+  esp_partition_pos_t pos={part->address,part->size}; esp_image_metadata_t meta={};
+  if(esp_image_get_metadata(&pos,&meta)!=ESP_OK||meta.image_len==0||meta.image_len>part->size){
+    server.send(500,"text/plain","Cannot determine valid running firmware image size");return;
+  }
+  server.sendHeader("Content-Disposition","attachment; filename=\"esp32-gnss-current.bin\"");
+  server.sendHeader("Cache-Control","no-store"); server.setContentLength(meta.image_len);
+  server.send(200,"application/octet-stream","");
+  WiFiClient client=server.client(); uint8_t buffer[1024]; size_t offset=0;
+  while(offset<meta.image_len&&client.connected()){
+    size_t count=(meta.image_len-offset)>sizeof(buffer)?sizeof(buffer):(meta.image_len-offset);
+    if(esp_partition_read(part,offset,buffer,count)!=ESP_OK)break;
+    size_t sent=0;
+    while(sent<count&&client.connected()){
+      size_t n=client.write(buffer+sent,count-sent); if(n==0){delay(2);continue;} sent+=n;
+    }
+    if(sent!=count)break; offset+=count;
+  }
+}
+
+void handleFirmwareUploadResult() {
+  if(!firmwareUploadOk){
+    JsonDocument doc;doc["ok"]=false;doc["error"]=firmwareUploadError.length()?firmwareUploadError:"Firmware upload failed";
+    String body;serializeJson(doc,body);server.send(500,"application/json; charset=utf-8",body);return;
+  }
+  JsonDocument doc;doc["ok"]=true;doc["message"]="Firmware written and verified; rebooting";doc["bytes"]=firmwareUploadBytes;
+  String body;serializeJson(doc,body);server.send(200,"application/json; charset=utf-8",body);
+  delay(600);ESP.restart();
+}
+
+void handleFirmwareUploadStream() {
+  HTTPUpload& upload=server.upload();
+  if(upload.status==UPLOAD_FILE_START){
+    firmwareUploadOk=false;firmwareUploadError="";firmwareUploadBytes=0;
+    Serial.printf("OTA upload start: %s\n",upload.filename.c_str());
+    if(!Update.begin(UPDATE_SIZE_UNKNOWN,U_FLASH)){firmwareUploadError="Update.begin failed, code "+String(Update.getError());Update.printError(Serial);}
+  }else if(upload.status==UPLOAD_FILE_WRITE){
+    if(firmwareUploadError.length()==0){
+      size_t written=Update.write(upload.buf,upload.currentSize);
+      if(written!=upload.currentSize){firmwareUploadError="Flash write failed, code "+String(Update.getError());Update.printError(Serial);Update.abort();}
+      else firmwareUploadBytes+=written;
+    }
+  }else if(upload.status==UPLOAD_FILE_END){
+    if(firmwareUploadError.length()==0&&Update.end(true)){
+      firmwareUploadOk=true;Serial.printf("OTA upload complete: %u bytes\n",(unsigned)firmwareUploadBytes);
+    }else{
+      if(firmwareUploadError.length()==0)firmwareUploadError="Image verification failed, code "+String(Update.getError());
+      Update.printError(Serial);Update.abort();
+    }
+  }else if(upload.status==UPLOAD_FILE_ABORTED){
+    Update.abort();firmwareUploadOk=false;firmwareUploadError="Upload aborted by client";
+  }
+}
+
 void handleSystemReboot() {
   server.send(200, "application/json; charset=utf-8", R"({"ok":true,"message":"ESP32 перезагружается"})");
   delay(250); ESP.restart();
@@ -2002,6 +2163,9 @@ void setup() {
   server.on("/", HTTP_GET, handleRoot);
   server.on("/coords", HTTP_GET, handleCoords);
   server.on("/system/reboot", HTTP_POST, handleSystemReboot);
+  server.on("/firmware/info", HTTP_GET, handleFirmwareInfo);
+  server.on("/firmware/download", HTTP_GET, handleFirmwareDownload);
+  server.on("/firmware/update", HTTP_POST, handleFirmwareUploadResult, handleFirmwareUploadStream);
   server.on("/points", HTTP_GET, handleSavedPoints);
   server.on("/points/save", HTTP_POST, handleSavePoint);
   server.on("/points/update", HTTP_POST, handleUpdatePoint);
