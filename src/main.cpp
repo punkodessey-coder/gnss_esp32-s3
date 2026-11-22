@@ -91,6 +91,7 @@ uint32_t lastCoordinateMs = 0;
 String coordinateSource = "";
 int timezoneOffsetMinutes = 0;
 int16_t wifiScanStatus = WIFI_SCAN_FAILED;
+bool nmeaInvalidPosConfigured = false;
 double lat = 0.0;
 double lng = 0.0;
 double altitude = 0.0;
@@ -338,7 +339,19 @@ void processUbxByte(uint8_t c) {
     if(a==ubxFrame[ubxFramePos-2]&&b==ubxFrame[ubxFramePos-1]){
       lastUbxFrameHex=bytesToHex(ubxFrame,ubxFramePos);
       uint8_t cls=ubxFrame[2],id=ubxFrame[3];
-      if(cls==0x05&&(id==0x01||id==0x00))ubxLastEvent=(id==1?"UBX ACK":"UBX NAK");
+      if (cls == 0x06 && id == 0x17 && (ubxFrameLength == 4 || ubxFrameLength == 12)) {
+        uint8_t cfgNmea[12] = {};
+        for (size_t i = 0; i < ubxFrameLength; ++i) cfgNmea[i] = ubxFrame[6 + i];
+        if ((cfgNmea[0] & 0x03) != 0x03) {
+          // u-blox CFG-NMEA filter bits 0/1: output positions even when the fix is invalid.
+          cfgNmea[0] |= 0x03;
+          sendUbx(0x06, 0x17, cfgNmea, ubxFrameLength);
+          ubxLastEvent = "CFG-NMEA: включён вывод координат при невалидном фиксе";
+        } else {
+          ubxLastEvent = "CFG-NMEA: вывод координат при невалидном фиксе уже включён";
+        }
+        nmeaInvalidPosConfigured = true;
+      } else if(cls==0x05&&(id==0x01||id==0x00))ubxLastEvent=(id==1?"UBX ACK":"UBX NAK");
       else ubxLastEvent="Ответ UBX "+String(cls,HEX)+":"+String(id,HEX);
     }
     ubxFramePos=0;ubxFrameLength=0;
@@ -989,7 +1002,7 @@ try{
   document.getElementById('lngValue').textContent=lng.toFixed(6);
   document.getElementById('satValue').textContent=String(d.sat??0);
   document.getElementById('satVisibleValue').textContent=String(d.sat_visible??0);
-document.getElementById('gsvSnrValue').textContent=d.gsv_snr_count?Number(d.gsv_snr_avg).toFixed(1)+' dB ('+d.gsv_snr_count+')':'—';
+document.getElementById('gsvSnrValue').textContent=d.gsv_snr_count?Number(d.gsv_snr_avg).toFixed(1)+' dB-Hz ('+d.gsv_snr_count+')':'—';
   document.getElementById('coords').textContent=hasCoords?lat.toFixed(6)+', '+lng.toFixed(6):'Координаты ещё не получены';
   currentFix=!!d.valid; currentCoordinatesAvailable=hasCoords;
   if(hasCoords){currentLat=lat;currentLng=lng;}
@@ -1550,6 +1563,7 @@ setInterval(()=>{if(!document.getElementById('ubxTab').classList.contains('hidde
 setInterval(()=>{if(!document.getElementById('aiTab').classList.contains('hidden'))refreshAi();},1000);
 setInterval(()=>{if(!document.getElementById('satTab').classList.contains('hidden'))refreshSatellites();},1500);
 setInterval(()=>{if(!document.getElementById('deviceTab').classList.contains('hidden'))refreshNetworkStatus();},5000);
+refreshNetworkStatus();
 selectUbxPage('gnss');
 loadMaps();
 refreshGps();
@@ -2399,6 +2413,8 @@ void setup() {
   }
 
   gpsSerial.begin(gpsBaud, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
+  delay(250);
+  sendUbx(0x06, 0x17, nullptr, 0); // Poll CFG-NMEA; enable invalid-position output while preserving other settings.
   simulatorSerial.begin(gpsBaud, SERIAL_8N1, 9, 8);
   Serial.println("NMEA simulator UART1 ready: TX GPIO8, RX GPIO9, 57600 baud");
 
