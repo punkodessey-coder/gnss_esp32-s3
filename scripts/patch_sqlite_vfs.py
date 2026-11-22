@@ -4,16 +4,21 @@
 Import("env")
 import os
 import re
+from datetime import datetime, timezone
 
 # Embed the exact Git revision through a generated header. Passing a quoted
 # string via CPPDEFINES is not portable across SCons/PlatformIO toolchains.
 git_sha = os.environ.get('GITHUB_SHA', 'local')
+build_utc = datetime.now(timezone.utc)
+build_date = build_utc.strftime('%Y-%m-%d')
+build_time = build_utc.strftime('%H:%M:%S')
+build_timestamp = build_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
 project_dir = env.subst("$PROJECT_DIR")
 include_dir = os.path.join(project_dir, "include")
 os.makedirs(include_dir, exist_ok=True)
 header_path = os.path.join(include_dir, "firmware_build_info.h")
 with open(header_path, "w", encoding="utf-8") as header:
-    header.write('#pragma once\n#define FIRMWARE_GIT_SHA "' + git_sha + '"\n#define FIRMWARE_VERSION "' + os.environ.get('FIRMWARE_VERSION', '0.0.0-local') + '"\n')
+    header.write('#pragma once\n#define FIRMWARE_GIT_SHA "' + git_sha + '"\n#define FIRMWARE_VERSION "' + os.environ.get('FIRMWARE_VERSION', '0.0.0-local') + '"\n#define FIRMWARE_BUILD_DATE "' + build_date + '"\n#define FIRMWARE_BUILD_TIME "' + build_time + ' UTC"\n#define FIRMWARE_BUILD_TIMESTAMP "' + build_timestamp + '"\n')
 
 libdeps = env.subst("$PROJECT_LIBDEPS_DIR")
 pioenv = env.subst("$PIOENV")
