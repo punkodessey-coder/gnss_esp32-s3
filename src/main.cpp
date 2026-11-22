@@ -684,8 +684,7 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 let currentMap='';
 let tileLayer=null;
 let map=null, gpsMarker=null, currentFix=false;
-let currentLat=54.9227,currentLng=43.3448;
-let yandexMap=null,yandexCircle=null,yandexApiKey='';
+let currentLat=59.9386,currentLng=30.3141;
 let followGps=true, mapLoadToken=0, mapTilesLoaded=0, mapTilesFailed=0;
 
 function toggleMenu(){document.getElementById('mainMenu').classList.toggle('open');}
@@ -707,7 +706,6 @@ document.getElementById('tabPointsBtn').classList.toggle('active',name==='points
 document.getElementById('tabAiBtn').classList.toggle('active',name==='ai');
 if(name==='gps'){
   if(map) setTimeout(()=>map.invalidateSize(),150);
-  if(yandexMap) setTimeout(()=>yandexMap.container.fitToViewport(),150);
 }
 if(name==='tests') refreshUart();
 if(name==='device'){document.getElementById('rebootStatus').textContent='Контроллер работает';loadFirmwareInfo();}
@@ -795,7 +793,7 @@ async function selectMap(value){
   if(!tileLayer){setMapStatus('Неизвестный тип карты','error');return;}
   attachTileProgress(tileLayer,token,value.startsWith('sd:')?'Офлайн '+value.substring(3):'Онлайн '+value.substring(7).toUpperCase());
   tileLayer.addTo(map);
-  if(currentFix)updateLeafletPoint(currentLat,currentLng);else map.setView([54.9227,43.3448],value==='sd:world'?8:11,{animate:false});
+  if(currentFix)updateLeafletPoint(currentLat,currentLng);else {const selectedMapName=value.startsWith('sd:')?value.substring(3):'';map.setView([59.9386,30.3141],/world/i.test(selectedMapName)?8:11,{animate:false});}
   setMapStatus(value.startsWith('sd:')?'Открываю MBTiles '+value.substring(3)+'…':'Запрашиваю тайлы вокруг точки…','loading');
 }
 function updateLeafletPoint(lat,lng){
@@ -804,16 +802,8 @@ function updateLeafletPoint(lat,lng){
   else gpsMarker.setLatLng([lat,lng]);
   if(followGps)map.panTo([lat,lng],{animate:false});
 }
-function updateYandexPoint(lat,lng){
-  if(!yandexMap)return;
-  const coords=[lat,lng];
-  if(!yandexCircle){yandexCircle=new ymaps.Circle([coords,5],{}, {fillColor:'#1677ffCC',strokeColor:'#ffffff',strokeWidth:2});yandexMap.geoObjects.add(yandexCircle);}
-  else yandexCircle.geometry.setCoordinates(coords);
-  if(followGps)yandexMap.setCenter(coords,16,{duration:0});
-}
 function removeCurrentMapPoint(){
   if(gpsMarker && map){map.removeLayer(gpsMarker);gpsMarker=null;}
-  if(yandexCircle && yandexMap){yandexMap.geoObjects.remove(yandexCircle);yandexCircle=null;}
 }
 async function saveFixTimeout(){
   const input=document.getElementById('fixTimeoutSeconds');
@@ -1454,29 +1444,6 @@ void handleSetFixTimeout() {
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
-void handleYandexKeyGet() {
-  JsonDocument doc;
-  doc["key"] = preferences.getString("yandex_key", "");
-  String out; serializeJson(doc, out);
-  server.sendHeader("Cache-Control", "no-store");
-  server.send(200, "application/json", out);
-}
-
-void handleYandexKeySet() {
-  JsonDocument input;
-  if (deserializeJson(input, server.arg("plain"))) {
-    server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid JSON\"}");
-    return;
-  }
-  String key = input["key"] | "";
-  key.trim();
-  if (key.length() > 160) {
-    server.send(400, "application/json", "{\"ok\":false,\"error\":\"key too long\"}");
-    return;
-  }
-  preferences.putString("yandex_key", key);
-  server.send(200, "application/json", "{\"ok\":true}");
-}
 
 void handleCoords() {
   server.sendHeader("Cache-Control", "no-store");
@@ -1924,7 +1891,7 @@ void handleFirmwareDownload() {
   if(!part){server.send(500,"text/plain","Running application partition not found");return;}
   esp_partition_pos_t pos={part->address,part->size};esp_image_metadata_t meta={};
   if(esp_image_get_metadata(&pos,&meta)!=ESP_OK||meta.image_len==0||meta.image_len>part->size||meta.image_len>0xFFFFFFFFULL){server.send(500,"text/plain","Cannot determine ZIP32 firmware image size");return;}
-  const char entryName[]="firmware.bin";const uint16_t nameLen=sizeof(entryName)-1;uint8_t buffer[1024];uint32_t crc=0xFFFFFFFFUL;size_t offset=0;
+  char entryName[64];snprintf(entryName,sizeof(entryName),"ESP32-GNSS-v%s.bin",FIRMWARE_VERSION);const uint16_t nameLen=(uint16_t)strlen(entryName);uint8_t buffer[1024];uint32_t crc=0xFFFFFFFFUL;size_t offset=0;
   while(offset<meta.image_len){size_t count=min(sizeof(buffer),(size_t)(meta.image_len-offset));if(esp_partition_read(part,offset,buffer,count)!=ESP_OK){server.send(500,"text/plain","Flash read failed while calculating CRC32");return;}for(size_t i=0;i<count;i++){crc^=buffer[i];for(uint8_t bit=0;bit<8;bit++)crc=(crc>>1)^((crc&1)?0xEDB88320UL:0);}offset+=count;}crc^=0xFFFFFFFFUL;
   const uint32_t imageSize=(uint32_t)meta.image_len;const uint32_t zipSize=30U+nameLen+imageSize+46U+nameLen+22U;char filename[96];snprintf(filename,sizeof(filename),"ESP32-GNSS-v%s.zip",FIRMWARE_VERSION);
   server.sendHeader("Content-Disposition",String("attachment; filename=\"")+filename+"\"");server.sendHeader("Cache-Control","no-store");server.setContentLength(zipSize);server.send(200,"application/zip","");

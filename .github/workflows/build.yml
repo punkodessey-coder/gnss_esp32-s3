@@ -48,11 +48,9 @@ jobs:
       - name: Prepare firmware artifact
         run: |
           VERSION="1.2.${GITHUB_RUN_NUMBER}"
-          mkdir -p artifact/package
-          cp .pio/build/esp32s3/firmware.bin artifact/package/firmware.bin
-          printf 'version=%s\nbuild_date=%s\ngit_commit=%s\n' "$VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$GITHUB_SHA" > artifact/package/firmware-info.txt
-          (cd artifact/package && zip -0 "../ESP32-GNSS-v${VERSION}.zip" firmware.bin firmware-info.txt)
+          mkdir -p artifact
           cp .pio/build/esp32s3/firmware.bin artifact/firmware.bin
+          printf 'version=%s\\nbuild_date=%s\\ngit_commit=%s\\n' "$VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$GITHUB_SHA" > artifact/firmware-info.txt
           if [ -f .pio/build/esp32s3/bootloader.bin ]; then cp .pio/build/esp32s3/bootloader.bin artifact/; fi
           if [ -f .pio/build/esp32s3/partitions.bin ]; then cp .pio/build/esp32s3/partitions.bin artifact/; fi
 
