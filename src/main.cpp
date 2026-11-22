@@ -1494,7 +1494,7 @@ async function refreshAi(){
     document.getElementById('aiAnomaly').textContent=d.anomaly?d.anomaly_code:'Не обнаружена';
     document.getElementById('aiMismatch').textContent=d.gnss_speed_position_mismatch?'Есть расхождение':'Нет явного расхождения';
     document.getElementById('aiMotion').textContent=motion[d.motion]||d.motion;
-    document.getElementById('aiSnr').textContent=d.avg_gsv_snr>0?Number(d.avg_gsv_snr).toFixed(1)+' ('+d.snr_satellites+' спутн.)':'Нет данных';
+    document.getElementById('aiSnr').textContent=d.avg_gsv_snr>0?Number(d.avg_gsv_snr).toFixed(1)+' дБ ('+d.snr_satellites+' спутн.)':'Нет данных';
     document.getElementById('aiHdopTrend').textContent=Number(d.hdop_trend).toFixed(2);
     document.getElementById('aiSnrTrend').textContent=Number(d.snr_trend).toFixed(1);
     document.getElementById('aiSituation').textContent=d.situation||'Сбор телеметрии…';
@@ -1726,7 +1726,7 @@ void handleAiReset() {
 void handleAiLogging() {
   const bool enabled = server.arg("enabled") == "1";
   if (enabled && !sdReady) { server.send(503,"application/json",R"({"enabled":false,"error":"microSD недоступна"})"); return; }
-  if(enabled&&!aiLoggingEnabled){
+  if(enabled){
     if(SD_MMC.exists("/ai_dataset.csv"))SD_MMC.remove("/ai_dataset.csv");
     File fresh=SD_MMC.open("/ai_dataset.csv",FILE_WRITE);
     if(!fresh){server.send(500,"application/json",R"({"enabled":false,"error":"Не удалось создать новый CSV"})");return;}
