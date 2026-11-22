@@ -86,6 +86,11 @@ size_t firmwareUploadBytes = 0;
 Preferences preferences;
 
 bool haveFix = false;
+bool coordinatesAvailable = false;
+uint32_t lastCoordinateMs = 0;
+String coordinateSource = "";
+int timezoneOffsetMinutes = 0;
+int16_t wifiScanStatus = WIFI_SCAN_FAILED;
 double lat = 0.0;
 double lng = 0.0;
 double altitude = 0.0;
@@ -277,6 +282,9 @@ String uartJson() {
 String coordsJson() {
   JsonDocument doc;
   doc["valid"] = haveFix;
+  doc["coordinates_available"] = coordinatesAvailable;
+  doc["coordinate_source"] = coordinateSource;
+  doc["coordinate_age_ms"] = coordinatesAvailable ? (long)(millis() - lastCoordinateMs) : -1;
   doc["lat"] = serialized(String(lat, 7));
   doc["lng"] = serialized(String(lng, 7));
   doc["alt"] = altitude;
@@ -350,6 +358,22 @@ String nmeaField(const String& line, uint8_t fieldIndex) {
   return "";
 }
 
+bool parseNmeaCoordinate(const String& raw, const String& hemisphere, bool latitude, double& result) {
+  if (!raw.length() || hemisphere.length() != 1) return false;
+  const double packed = raw.toDouble();
+  if (!isfinite(packed) || packed <= 0.0) return false;
+  const int degrees = (int)(packed / 100.0);
+  const double minutes = packed - degrees * 100.0;
+  const int maxDegrees = latitude ? 90 : 180;
+  if (degrees > maxDegrees || minutes < 0.0 || minutes >= 60.0) return false;
+  const char h = hemisphere[0];
+  if (latitude && h != 'N' && h != 'S') return false;
+  if (!latitude && h != 'E' && h != 'W') return false;
+  result = degrees + minutes / 60.0;
+  if (h == 'S' || h == 'W') result = -result;
+  return true;
+}
+
 bool validNmeaChecksum(const String& line) {
   int star = line.indexOf('*');
   if (star < 0) return true; // Some receivers can be configured without checksums.
@@ -367,7 +391,26 @@ void processNmeaLine(const String& line) {
     const int fixQuality = nmeaField(line, 6).toInt();
     const int used = nmeaField(line, 7).toInt();
     satellites = (fixQuality > 0) ? constrain(used, 0, 99) : 0;
+    double nmeaLat = 0.0, nmeaLng = 0.0;
+    const bool ggaCoordsUpdated = parseNmeaCoordinate(nmeaField(line, 2), nmeaField(line, 3), true, nmeaLat) &&
+        parseNmeaCoordinate(nmeaField(line, 4), nmeaField(line, 5), false, nmeaLng);
+    if (ggaCoordsUpdated) {
+      lat = nmeaLat; lng = nmeaLng; coordinatesAvailable = true;
+      lastCoordinateMs = millis(); coordinateSource = "GGA";
+    }
+    if (fixQuality > 0 && ggaCoordsUpdated) { haveFix = true; lastFixMs = millis(); }
+    else if (fixQuality == 0) haveFix = false;
     lastGgaMs = millis();
+  } else if (type == "RMC") {
+    const String status = nmeaField(line, 2);
+    double nmeaLat = 0.0, nmeaLng = 0.0;
+    if (parseNmeaCoordinate(nmeaField(line, 3), nmeaField(line, 4), true, nmeaLat) &&
+        parseNmeaCoordinate(nmeaField(line, 5), nmeaField(line, 6), false, nmeaLng)) {
+      lat = nmeaLat; lng = nmeaLng; coordinatesAvailable = true;
+      lastCoordinateMs = millis(); coordinateSource = "RMC";
+      if (status == "A") { haveFix = true; lastFixMs = millis(); }
+      else if (status == "V") haveFix = false;
+    }
   } else if (type == "GSA") {
     String system = line.substring(1, 3);
     for (uint8_t i = 0; i < satelliteInfoCount; ++i) {
@@ -715,6 +758,7 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <div class="card">
 <h2>Интернет и синхронизация времени</h2>
 <p class="small">Точка доступа ESP32-GPS остаётся включённой. Для NTP подключите ESP32 к Wi-Fi роутеру с доступом в интернет.</p>
+<label for="wifiNetworks">Найденные сети Wi-Fi</label><select id="wifiNetworks" style="width:100%"><option value="">Сначала выполните сканирование</option></select><button class="gray" onclick="scanWifiNetworks()">Сканировать сети</button><button class="gray" onclick="selectWifiNetwork()">Выбрать сеть</button>
 <label for="wifiSsid">Имя Wi-Fi сети (SSID)</label><input id="wifiSsid" maxlength="32" autocomplete="off" placeholder="SSID">
 <label for="wifiPassword">Пароль Wi-Fi</label><input id="wifiPassword" type="password" maxlength="63" autocomplete="new-password" placeholder="Пароль">
 <button onclick="saveWifiNetwork()">Подключить и сохранить</button><div id="networkStatus" class="small">Проверка…</div>
@@ -767,8 +811,9 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <script>
 let currentMap='';
 let tileLayer=null;
-let map=null, gpsMarker=null, currentFix=false;
+let map=null, gpsMarker=null, currentFix=false, currentCoordinatesAvailable=false;
 let currentLat=59.9386,currentLng=30.3141;
+let timezoneConfigured=false, wifiScanBusy=false;
 let followGps=true, mapLoadToken=0, mapTilesLoaded=0, mapTilesFailed=0;
 
 function toggleMenu(){document.getElementById('mainMenu').classList.toggle('open');}
@@ -794,7 +839,7 @@ if(name==='gps'){
   if(map) setTimeout(()=>map.invalidateSize(),150);
 }
 if(name==='sat') refreshSatellites();
-if(name==='device') refreshNetworkStatus();
+if(name==='device'){refreshNetworkStatus();scanWifiNetworks();}
 if(name==='tests') refreshUart();
 if(name==='device'){document.getElementById('rebootStatus').textContent='Контроллер работает';loadFirmwareInfo();}
 if(name==='ubx' && !document.getElementById('ubxFields').children.length) selectUbxPage('gnss');
@@ -817,7 +862,7 @@ function ensureLeaflet(){
 }
 function initMap(){
   if(typeof L==='undefined'){document.getElementById('mapStatus').textContent='Leaflet не найдена: скопируйте leaflet.js/leaflet.css в /lib на microSD (maps/download_maps.ps1 делает это) или подключите телефон к интернету';return false;}
-  if(!map){map=L.map('map').setView(currentFix?[currentLat,currentLng]:[59.9386,30.3141],currentFix?16:11);map.on('dragstart',disableGpsFollow);map.getContainer().addEventListener('wheel',disableGpsFollow,{passive:true});}
+  if(!map){map=L.map('map').setView(currentCoordinatesAvailable?[currentLat,currentLng]:[59.9386,30.3141],currentCoordinatesAvailable?16:11);map.on('dragstart',disableGpsFollow);map.getContainer().addEventListener('wheel',disableGpsFollow,{passive:true});}
   return true;
 }
 async function loadMaps(){
@@ -881,13 +926,13 @@ async function selectMap(value){
   if(!tileLayer){setMapStatus('Неизвестный тип карты','error');return;}
   attachTileProgress(tileLayer,token,value.startsWith('sd:')?'Офлайн '+value.substring(3):'Онлайн '+value.substring(7).toUpperCase());
   tileLayer.addTo(map);
-  if(currentFix)updateLeafletPoint(currentLat,currentLng);else {const selectedMapName=value.startsWith('sd:')?value.substring(3):'';map.setView([59.9386,30.3141],/world/i.test(selectedMapName)?8:11,{animate:false});}
+  if(currentCoordinatesAvailable)updateLeafletPoint(currentLat,currentLng);else {const selectedMapName=value.startsWith('sd:')?value.substring(3):'';map.setView([59.9386,30.3141],/world/i.test(selectedMapName)?8:11,{animate:false});}
   setMapStatus(value.startsWith('sd:')?'Открываю MBTiles '+value.substring(3)+'…':'Запрашиваю тайлы вокруг точки…','loading');
 }
 function updateLeafletPoint(lat,lng){
   if(!map)return;
-  if(!gpsMarker)gpsMarker=L.circleMarker([lat,lng],{radius:6,color:'#ffffff',weight:2,fillColor:'#1677ff',fillOpacity:1}).addTo(map);
-  else gpsMarker.setLatLng([lat,lng]);
+  if(!gpsMarker)gpsMarker=L.circleMarker([lat,lng],{radius:6,color:'#ffffff',weight:2,fillColor:currentFix?'#1677ff':'#f59e0b',fillOpacity:1}).addTo(map);
+  else {gpsMarker.setLatLng([lat,lng]);gpsMarker.setStyle({fillColor:currentFix?'#1677ff':'#f59e0b'});}
   if(followGps)map.panTo([lat,lng],{animate:false});
 }
 function removeCurrentMapPoint(){
@@ -937,39 +982,65 @@ async function deletePoint(id){
 async function refreshGps(){
 try{
   const d=await (await fetch('/coords?ts='+Date.now())).json();
-  const lat=d.valid?Number(d.lat):0;
-  const lng=d.valid?Number(d.lng):0;
+  const hasCoords=!!d.coordinates_available;
+  const lat=hasCoords?Number(d.lat):0;
+  const lng=hasCoords?Number(d.lng):0;
   document.getElementById('latValue').textContent=lat.toFixed(6);
   document.getElementById('lngValue').textContent=lng.toFixed(6);
   document.getElementById('satValue').textContent=String(d.sat??0);
   document.getElementById('satVisibleValue').textContent=String(d.sat_visible??0);
 document.getElementById('gsvSnrValue').textContent=d.gsv_snr_count?Number(d.gsv_snr_avg).toFixed(1)+' dB ('+d.gsv_snr_count+')':'—';
-  document.getElementById('coords').textContent=lat.toFixed(6)+', '+lng.toFixed(6);
-  currentFix=!!d.valid;
+  document.getElementById('coords').textContent=hasCoords?lat.toFixed(6)+', '+lng.toFixed(6):'Координаты ещё не получены';
+  currentFix=!!d.valid; currentCoordinatesAvailable=hasCoords;
+  if(hasCoords){currentLat=lat;currentLng=lng;}
   const badge=document.getElementById('fixBadge');badge.textContent=d.valid?'GPS FIX':'НЕТ ФИКСА';badge.className='fix-badge '+(d.valid?'has-fix':'no-fix');
   if(d.fix_timeout_s && document.activeElement!==document.getElementById('fixTimeoutSeconds')){
     document.getElementById('fixTimeoutSeconds').value=d.fix_timeout_s;
   }
   if(!d.valid){
-    document.getElementById('status').textContent='Нет актуального фикса';
-    removeCurrentMapPoint();
+    document.getElementById('status').textContent=hasCoords?'Координаты из NMEA ('+(d.coordinate_source||'—')+') без подтверждённого фикса · возраст '+Math.round((d.coordinate_age_ms||0)/1000)+' с':'Нет фикса и координаты ещё не переданы';
+    if(hasCoords && map) updateLeafletPoint(lat,lng); else if(!hasCoords) removeCurrentMapPoint();
     return;
   }
-  currentLat=lat; currentLng=lng;
-  document.getElementById('status').textContent='Используется: '+(d.sat??0)+' | видно: '+(d.sat_visible??0)+' | HDOP: '+d.hdop+' | обновлено '+Math.round(d.age_ms/1000)+' с назад';
+  document.getElementById('status').textContent='Фикс подтверждён · используется: '+(d.sat??0)+' | видно: '+(d.sat_visible??0)+' | HDOP: '+d.hdop+' | обновлено '+Math.round(d.age_ms/1000)+' с назад';
   if(map) updateLeafletPoint(lat,lng);
 }catch(e){}
 }
 async function refreshNetworkStatus(){
- try{const d=await (await fetch('/network/status?ts='+Date.now(),{cache:'no-store'})).json();
- document.getElementById('networkStatus').textContent=(d.sta_connected?'Wi-Fi подключён: '+d.ssid+' · IP '+d.ip:'Wi-Fi не подключён')+' · NTP: '+(d.time_synced?'синхронизировано '+d.utc:'ожидание синхронизации');
+ try{
+ if(!timezoneConfigured){const localOffset=-new Date().getTimezoneOffset();await fetch('/network/timezone?offset='+localOffset,{method:'POST'});timezoneConfigured=true;}
+ const d=await (await fetch('/network/status?ts='+Date.now(),{cache:'no-store'})).json();
+ document.getElementById('networkStatus').textContent=(d.sta_connected?'Wi-Fi подключён: '+d.ssid+' · IP '+d.ip:'Wi-Fi не подключён')+' · NTP: '+(d.time_synced?'местное время '+d.local+' (UTC '+d.utc+')':'ожидание синхронизации');
  if(d.ssid)document.getElementById('wifiSsid').value=d.ssid;
  }catch(e){document.getElementById('networkStatus').textContent='Ошибка сети: '+e.message;}
 }
+async function scanWifiNetworks(){
+ if(wifiScanBusy)return;wifiScanBusy=true;
+ const status=document.getElementById('networkStatus'),select=document.getElementById('wifiNetworks');
+ status.textContent='Сканирую доступные Wi-Fi сети…';
+ try{
+  const start=await (await fetch('/wifi/scan',{method:'POST'})).json();
+  if(!start.started && start.status!==0)throw new Error(start.error||'Не удалось запустить сканирование');
+  let result=null;
+  for(let i=0;i<25;i++){
+   await new Promise(resolve=>setTimeout(resolve,700));
+   result=await (await fetch('/wifi/scan/status?ts='+Date.now(),{cache:'no-store'})).json();
+   if(result.done||result.failed)break;
+  }
+  if(!result||!result.done)throw new Error(result&&result.failed?'Ошибка сканирования':'Сканирование заняло слишком много времени');
+  select.innerHTML='';
+  (result.networks||[]).sort((a,b)=>b.rssi-a.rssi).forEach(n=>{
+   const option=document.createElement('option');option.value=n.ssid;option.textContent=(n.ssid||'(скрытая сеть)')+' · '+n.rssi+' dBm · канал '+n.channel+' · '+(n.secure?'защищена':'открытая');select.appendChild(option);
+  });
+  status.textContent='Найдено сетей: '+result.count+'. Выберите сеть из списка или введите SSID вручную.';
+ }catch(e){status.textContent='Сканирование Wi-Fi: '+e.message;}
+ finally{wifiScanBusy=false;}
+}
+function selectWifiNetwork(){const select=document.getElementById('wifiNetworks');if(select.value)document.getElementById('wifiSsid').value=select.value;}
 async function saveWifiNetwork(){
  const ssid=document.getElementById('wifiSsid').value, password=document.getElementById('wifiPassword').value;
  const status=document.getElementById('networkStatus');status.textContent='Подключаюсь…';
- try{const r=await fetch('/network/config?ssid='+encodeURIComponent(ssid)+'&password='+encodeURIComponent(password),{method:'POST'});const d=await r.json();if(!r.ok)throw new Error(d.error||('HTTP '+r.status));status.textContent=d.message;setTimeout(refreshNetworkStatus,3000);}
+ try{const body=new URLSearchParams({ssid,password});const r=await fetch('/network/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});const d=await r.json();if(!r.ok)throw new Error(d.error||('HTTP '+r.status));status.textContent=d.message;setTimeout(refreshNetworkStatus,3000);}
  catch(e){status.textContent='Ошибка: '+e.message;}
 }
 async function refreshSatellites(){
@@ -1656,8 +1727,14 @@ void writeSituationLog() {
   time_t epoch = time(nullptr);
   char timestamp[24] = "NOT_SYNCED";
   const bool timeValid = epoch > 1700000000;
-  if (timeValid) { struct tm utc; gmtime_r(&epoch, &utc); strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &utc); }
-  if (file.size() == 0) file.println("timestamp_utc,time_status,uptime_ms,fix,sat_used,sat_visible,hdop,gsv_snr_avg,gps_speed_mps,anomaly,mismatch,verdict,reasons");
+  char timestampLocal[24] = "NOT_SYNCED";
+  if (timeValid) {
+    struct tm utc, local;
+    gmtime_r(&epoch, &utc); localtime_r(&epoch, &local);
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &utc);
+    strftime(timestampLocal, sizeof(timestampLocal), "%Y-%m-%dT%H:%M:%S", &local);
+  }
+  if (file.size() == 0) file.println("timestamp_utc,timestamp_local,time_status,uptime_ms,fix,sat_used,sat_visible,hdop,gsv_snr_avg,gps_speed_mps,anomaly,mismatch,verdict,reasons");
   String verdict = haveFix ? "Оценка GNSS" : "Нет актуального фикса";
   String reasons;
   if (!haveFix) reasons = "Нет актуального фикса; оценка ограничена";
@@ -1668,8 +1745,8 @@ void writeSituationLog() {
   else if (!aiMonitor.trained()) { verdict = "Накопление профиля"; reasons = "Недостаточно интервалов для статистики"; }
   else { verdict = "Явных отклонений не выявлено"; reasons = "Фикс актуален; статистика GNSS без выраженных отклонений; проверка скорости/перемещения не сработала. Это не исключает спуффинг."; }
   verdict.replace(',', ';'); reasons.replace(',', ';');
-  file.printf("%s,%s,%lu,%u,%d,%d,%.2f,%.2f,%.2f,%u,%u,\"%s\",\"%s\"\n",
-    timestamp, timeValid ? "NTP_SYNCED" : "NOT_SYNCED", now, haveFix?1U:0U, satellites,
+  file.printf("%s,%s,%s,%lu,%u,%d,%d,%.2f,%.2f,%.2f,%u,%u,\"%s\",\"%s\"\n",
+    timestamp, timestampLocal, timeValid ? "NTP_SYNCED" : "NOT_SYNCED", now, haveFix?1U:0U, satellites,
     satellitesVisible, hdop, gsvSnrCount?avgGsvSnr:NAN, gps.speed.isValid()?gps.speed.mps():NAN,
     aiMonitor.anomaly()?1U:0U, aiMonitor.mismatch()?1U:0U, verdict.c_str(), reasons.c_str());
   file.close();
@@ -2060,6 +2137,47 @@ void handleSatellites() {
   server.send(200, "application/json; charset=utf-8", out);
 }
 
+void handleWifiScanStart() {
+  if (WiFi.getMode() != WIFI_AP_STA && WiFi.getMode() != WIFI_STA) WiFi.mode(WIFI_AP_STA);
+  wifiScanStatus = WiFi.scanNetworks(true, true);
+  JsonDocument doc; doc["started"] = wifiScanStatus == WIFI_SCAN_RUNNING; doc["status"] = wifiScanStatus;
+  if (wifiScanStatus == WIFI_SCAN_FAILED) doc["error"] = "Не удалось запустить сканирование Wi-Fi";
+  String out; serializeJson(doc, out); server.send(200, "application/json", out);
+}
+
+void handleWifiScanStatus() {
+  const int16_t status = WiFi.scanComplete();
+  JsonDocument doc;
+  doc["done"] = status >= 0; doc["scanning"] = status == WIFI_SCAN_RUNNING; doc["failed"] = status == WIFI_SCAN_FAILED;
+  if (status >= 0) {
+    JsonArray networks = doc["networks"].to<JsonArray>();
+    for (int i = 0; i < status; ++i) {
+      JsonObject item = networks.add<JsonObject>();
+      item["ssid"] = WiFi.SSID(i); item["rssi"] = WiFi.RSSI(i);
+      item["channel"] = WiFi.channel(i); item["secure"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+    }
+    doc["count"] = status;
+  }
+  String out; serializeJson(doc, out); server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", out);
+}
+
+void applyTimezoneOffset(int offsetMinutes) {
+  timezoneOffsetMinutes = constrain(offsetMinutes, -720, 840);
+  const int absoluteMinutes = abs(timezoneOffsetMinutes);
+  char tz[24];
+  snprintf(tz, sizeof(tz), "UTC%c%d:%02d", timezoneOffsetMinutes >= 0 ? '-' : '+', absoluteMinutes / 60, absoluteMinutes % 60);
+  setenv("TZ", tz, 1); tzset();
+}
+
+void handleNetworkTimezone() {
+  if (!server.hasArg("offset")) { server.send(400, "application/json", R"({"ok":false,"error":"offset required"})"); return; }
+  const int offset = server.arg("offset").toInt();
+  if (offset < -720 || offset > 840) { server.send(400, "application/json", R"({"ok":false,"error":"timezone offset out of range"})"); return; }
+  applyTimezoneOffset(offset); preferences.putInt("tz_min", timezoneOffsetMinutes);
+  server.send(200, "application/json", R"({"ok":true})");
+}
+
 void handleNetworkConfig() {
   String ssid = server.arg("ssid"), password = server.arg("password"); ssid.trim();
   if (!ssid.length() || ssid.length() > 32 || password.length() > 63) {
@@ -2077,7 +2195,14 @@ void handleNetworkStatus() {
   doc["ip"] = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "";
   time_t epoch = time(nullptr); bool valid = epoch > 1700000000;
   doc["time_synced"] = valid;
-  if (valid) { struct tm utc; gmtime_r(&epoch, &utc); char stamp[24]; strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%SZ", &utc); doc["utc"] = stamp; }
+  if (valid) {
+    struct tm utc, local; char utcStamp[24], localStamp[32];
+    gmtime_r(&epoch, &utc); localtime_r(&epoch, &local);
+    strftime(utcStamp, sizeof(utcStamp), "%Y-%m-%dT%H:%M:%SZ", &utc);
+    strftime(localStamp, sizeof(localStamp), "%Y-%m-%d %H:%M:%S", &local);
+    doc["utc"] = utcStamp; doc["local"] = localStamp;
+  }
+  doc["timezone_offset_minutes"] = timezoneOffsetMinutes;
   String out; serializeJson(doc, out); server.sendHeader("Cache-Control", "no-store");
   server.send(200, "application/json", out);
 }
@@ -2286,6 +2411,8 @@ void setup() {
   }
 
   WiFi.mode(WIFI_AP_STA);
+  timezoneOffsetMinutes = preferences.getInt("tz_min", 0);
+  applyTimezoneOffset(timezoneOffsetMinutes);
   WiFi.softAP(AP_SSID, AP_PASS);
   String savedSsid = preferences.getString("wifi_ssid", "");
   String savedPass = preferences.getString("wifi_pass", "");
@@ -2295,6 +2422,9 @@ void setup() {
   server.on("/satellites", HTTP_GET, handleSatellites);
   server.on("/network/config", HTTP_POST, handleNetworkConfig);
   server.on("/network/status", HTTP_GET, handleNetworkStatus);
+  server.on("/network/timezone", HTTP_POST, handleNetworkTimezone);
+  server.on("/wifi/scan", HTTP_POST, handleWifiScanStart);
+  server.on("/wifi/scan/status", HTTP_GET, handleWifiScanStatus);
   server.on("/coords", HTTP_GET, handleCoords);
   server.on("/system/reboot", HTTP_POST, handleSystemReboot);
   server.on("/firmware/info", HTTP_GET, handleFirmwareInfo);
@@ -2443,11 +2573,9 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED && ntpConfigured) ntpConfigured = false;
 
   if (haveFix && millis() - lastFixMs > (unsigned long)fixTimeoutSeconds * 1000UL) {
-    haveFix = false;
-    lat = 0.0; lng = 0.0; altitude = 0.0;
-    satellites = 0; satellitesVisible = 0; hdop = 0.0;
+    haveFix = false; satellites = 0; hdop = 0.0;
   }
-  if (lastGgaMs && millis() - lastGgaMs > 3000 && !nmeaSimulatorEnabled) { satellites = 0; haveFix = false; lat = 0.0; lng = 0.0; altitude = 0.0; }
+  if (lastGgaMs && millis() - lastGgaMs > 3000 && !nmeaSimulatorEnabled) { satellites = 0; haveFix = false; }
   if (lastGsvMs && millis() - lastGsvMs > 5000) { satellitesVisible = 0; gsvSnrCount = 0; avgGsvSnr = 0.0f; }
 
   if (nmeaSimulatorEnabled && millis() - lastSimulatorSentenceMs >= 1000) {
