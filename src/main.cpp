@@ -783,6 +783,16 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <div class="card"><h3>Уровень сигнала по спутникам</h3><div class="small">SNR из NMEA GSV, не калиброванный C/N₀ и не RF-спектр.</div><svg id="snrBars" viewBox="0 0 360 180" style="width:100%;display:block;background:#101820;border-radius:10px"></svg></div>
 <div class="card"><h3>Радиочастотный спектр</h3><div class="small">NEO-6M не выдаёт IQ-отсчёты или FFT. Настоящий спектр/водопад требует внешнего SDR или приёмника с IQ.</div></div>
 <div class="card"><h3>Спутники</h3><div id="satelliteList" class="small">Ожидание данных…</div></div>
+<div class="metric"><span>Соответствие базовому профилю</span><strong id="aiScore">—</strong></div>
+<div class="metric"><span>Состояние модели</span><strong id="aiRisk">—</strong></div>
+<div class="metric"><span>Обучающие интервалы</span><strong id="aiSamples">0</strong></div>
+<div class="metric"><span>Аномалия</span><strong id="aiAnomaly">—</strong></div>
+<div class="metric"><span>Несоответствие скорости и координат GNSS</span><strong id="aiMismatch">—</strong></div>
+<div class="metric"><span>Класс движения</span><strong id="aiMotion">—</strong></div>
+<div class="metric"><span>Средний GSV SNR</span><strong id="aiSnr">—</strong></div>
+<div class="metric"><span>Тренд HDOP</span><strong id="aiHdopTrend">—</strong></div>
+<div class="metric"><span>Тренд SNR</span><strong id="aiSnrTrend">—</strong></div>
+<pre id="aiDetails" class="coords">Модель собирает исходный профиль приёма…</pre>
 </div>
 <div id="deviceTab" class="hidden">
 <div class="card">
@@ -820,16 +830,7 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <h2>AI / ML — мониторинг навигации</h2>
 <div id="aiStatus" class="small">Ожидание данных…</div>
 <div class="card" style="background:#152235"><h3>Заключение по текущей обстановке</h3><strong id="aiVerdict">Ожидание данных…</strong><div id="aiSituation" class="coords">Сбор телеметрии…</div><div id="aiReasons" class="small"></div></div>
-<div class="metric"><span>Соответствие базовому профилю</span><strong id="aiScore">—</strong></div>
-<div class="metric"><span>Состояние модели</span><strong id="aiRisk">—</strong></div>
-<div class="metric"><span>Обучающие интервалы</span><strong id="aiSamples">0</strong></div>
-<div class="metric"><span>Аномалия</span><strong id="aiAnomaly">—</strong></div>
-<div class="metric"><span>Несоответствие скорости и координат GNSS</span><strong id="aiMismatch">—</strong></div>
-<div class="metric"><span>Класс движения</span><strong id="aiMotion">—</strong></div>
-<div class="metric"><span>Средний GSV SNR</span><strong id="aiSnr">—</strong></div>
-<div class="metric"><span>Тренд HDOP</span><strong id="aiHdopTrend">—</strong></div>
-<div class="metric"><span>Тренд SNR</span><strong id="aiSnrTrend">—</strong></div>
-<pre id="aiDetails" class="coords">Модель собирает исходный профиль приёма…</pre>
+
 <button class="gray" onclick="resetAiModel()">Сбросить профиль модели</button>
 <div class="card"><h3>Профиль: импорт / экспорт</h3><a href="/ai/profile" style="color:#8ab4ff">Скачать профиль JSON</a><p><input id="aiProfileFile" type="file" accept=".json,application/json"></p><button onclick="uploadAiProfile()">Загрузить профиль</button><div id="aiProfileStatus" class="small"></div></div>
 <div class="card"><h3>Контрольная точка для обучения</h3><div class="small">Координаты используются только скриптом на компьютере для отбора строк CSV и не сохраняются в прошивке или профиле. Рекомендуемый радиус: 30–50 м.</div><label>Широта</label><input id="trainRefLat" type="number" step="0.000001"><label>Долгота</label><input id="trainRefLon" type="number" step="0.000001"><label>Радиус, м</label><input id="trainRadius" type="number" min="1" max="500" value="50"><button onclick="makeTrainCommand()">Сформировать команду обучения</button><pre id="trainCommand" class="coords"></pre></div>
