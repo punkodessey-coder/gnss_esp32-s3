@@ -19,6 +19,7 @@
 #include <esp_image_format.h>
 #include <esp_app_desc.h>
 #include <esp_system.h>
+#include <time.h>
 #include "firmware_build_info.h"
 
 #ifndef FIRMWARE_GIT_SHA
@@ -93,6 +94,11 @@ int satellitesVisible = 0; // satellites reported by GSV
 double hdop = 0.0;
 float avgGsvSnr = 0.0f;
 uint8_t gsvSnrCount = 0;
+struct SatelliteInfo { char system[3]; uint16_t prn; int8_t elevation; int16_t azimuth; int8_t snr; bool snrValid; bool used; uint32_t lastSeen; };
+static SatelliteInfo satelliteInfo[32];
+static uint8_t satelliteInfoCount = 0;
+static bool ntpConfigured = false;
+static unsigned long lastNtpRetryMs = 0;
 GnssAiMonitor aiMonitor;
 bool sdReady = false;
 String mbtilesLastError = "База ещё не открывалась";
@@ -362,7 +368,21 @@ void processNmeaLine(const String& line) {
     const int used = nmeaField(line, 7).toInt();
     satellites = (fixQuality > 0) ? constrain(used, 0, 99) : 0;
     lastGgaMs = millis();
+  } else if (type == "GSA") {
+    String system = line.substring(1, 3);
+    for (uint8_t i = 0; i < satelliteInfoCount; ++i) {
+      if (system == "GN" || system == satelliteInfo[i].system) satelliteInfo[i].used = false;
+    }
+    for (uint8_t field = 3; field <= 14; ++field) {
+      int prn = nmeaField(line, field).toInt();
+      if (prn <= 0) continue;
+      for (uint8_t i = 0; i < satelliteInfoCount; ++i) {
+        if (satelliteInfo[i].prn == prn &&
+            (system == "GN" || system == satelliteInfo[i].system)) satelliteInfo[i].used = true;
+      }
+    }
   } else if (type == "GSV") {
+    String system = line.substring(1, 3);
     const int totalMessages = constrain(nmeaField(line, 1).toInt(), 1, 9);
     const int messageNumber = constrain(nmeaField(line, 2).toInt(), 1, 9);
     const int visible = constrain(nmeaField(line, 3).toInt(), 0, 99);
@@ -371,11 +391,30 @@ void processNmeaLine(const String& line) {
       gsvCycleExpected = totalMessages; gsvCycleSeen = 0;
       gsvCycleVisible = visible;
     }
-    for (uint8_t field = 7; field < 23; field += 4) {
-      const String snrText = nmeaField(line, field);
-      if (snrText.length()) {
-        const int snr = snrText.toInt();
-        if (snr > 0 && snr <= 99) { gsvCycleSnrSum += snr; if (gsvCycleSnrCount < 99) ++gsvCycleSnrCount; }
+    for (uint8_t field = 4; field <= 16; field += 4) {
+      String prnText = nmeaField(line, field);
+      if (!prnText.length()) continue;
+      int prn = prnText.toInt();
+      if (prn <= 0 || prn > 999) continue;
+      int slot = -1;
+      for (uint8_t i = 0; i < satelliteInfoCount; ++i)
+        if (satelliteInfo[i].prn == prn && system == satelliteInfo[i].system) { slot = i; break; }
+      if (slot < 0 && satelliteInfoCount < 32) slot = satelliteInfoCount++;
+      if (slot >= 0) {
+        SatelliteInfo& sat = satelliteInfo[slot];
+        strncpy(sat.system, system.c_str(), 2); sat.system[2] = 0; sat.prn = prn;
+        sat.elevation = (int8_t)constrain(nmeaField(line, field + 1).toInt(), 0, 90);
+        sat.azimuth = (int16_t)constrain(nmeaField(line, field + 2).toInt(), 0, 359);
+        String snrText = nmeaField(line, field + 3);
+        int snr = snrText.toInt();
+        sat.snrValid = snrText.length() && snr > 0 && snr <= 99;
+        sat.snr = sat.snrValid ? (int8_t)snr : -1;
+        sat.lastSeen = millis();
+      }
+      String snrText = nmeaField(line, field + 3);
+      int snr = snrText.toInt();
+      if (snrText.length() && snr > 0 && snr <= 99) {
+        gsvCycleSnrSum += snr; if (gsvCycleSnrCount < 99) ++gsvCycleSnrCount;
       }
     }
     gsvCycleSeen = messageNumber; gsvCycleVisible = visible; lastGsvMs = millis();
@@ -589,6 +628,7 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <button id="tabUbxBtn" class="tab" onclick="showTab('ubx')">u-blox</button>
 <button id="tabPointsBtn" class="tab" onclick="showTab('points')">Точки</button>
 <button id="tabAiBtn" class="tab" onclick="showTab('ai')">AI / ML</button>
+<button id="tabSatBtn" class="tab" onclick="showTab('sat')">Спутники и сигнал</button>
 <button id="tabDeviceBtn" class="tab" onclick="showTab('device')">Устройство</button>
 </div></div>
 <main class="app-content">
@@ -655,6 +695,15 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <details><summary>Последний ответ приёмника (диагностика)</summary><pre id="ubxFrame" class="coords">—</pre></details>
 </section></div></div></div>
 <div id="pointsTab" class="hidden"><div class="card"><h2>Сохранённые точки</h2><div class="small">Название и координаты сохранённых местоположений</div><div id="savedPointsList" class="small">Загрузка…</div></div></div>
+<div id="satTab" class="hidden">
+<div class="card"><h2>Небесная диаграмма спутников</h2><div class="small">Центр — зенит, внешний круг — горизонт; азимут от севера по часовой стрелке. Цвет — уровень SNR из NMEA GSV.</div>
+<svg id="skyPlot" viewBox="0 0 320 320" style="width:100%;max-width:420px;display:block;margin:auto;background:#101820;border-radius:12px">
+<circle cx="160" cy="160" r="140" fill="none" stroke="#64748b"/><circle cx="160" cy="160" r="93.3" fill="none" stroke="#475569"/><circle cx="160" cy="160" r="46.7" fill="none" stroke="#475569"/><path d="M20 160H300 M160 20V300 M61 61L259 259 M259 61L61 259" stroke="#475569"/>
+<g fill="#cbd5e1" font-size="11"><text x="160" y="13" text-anchor="middle">N</text><text x="307" y="164">E</text><text x="160" y="315" text-anchor="middle">S</text><text x="5" y="164">W</text></g></svg><div id="satSummary" class="small">Ожидание GSV…</div></div>
+<div class="card"><h3>Уровень сигнала по спутникам</h3><div class="small">SNR из NMEA GSV, не калиброванный C/N₀ и не RF-спектр.</div><svg id="snrBars" viewBox="0 0 360 180" style="width:100%;display:block;background:#101820;border-radius:10px"></svg></div>
+<div class="card"><h3>Радиочастотный спектр</h3><div class="small">NEO-6M не выдаёт IQ-отсчёты или FFT. Настоящий спектр/водопад требует внешнего SDR или приёмника с IQ.</div></div>
+<div class="card"><h3>Спутники</h3><div id="satelliteList" class="small">Ожидание данных…</div></div>
+</div>
 <div id="deviceTab" class="hidden">
 <div class="card">
 <h2>Устройство — сведения о прошивке</h2>
@@ -662,6 +711,13 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 <button class="gray" onclick="loadFirmwareInfo()">Обновить сведения</button>
 <button onclick="downloadCurrentFirmware()">Выгрузить установленную прошивку (.zip)</button>
 <div class="small">Сохраняется точный образ запущенного приложения. Файл можно использовать как резервную копию.</div>
+</div>
+<div class="card">
+<h2>Интернет и синхронизация времени</h2>
+<p class="small">Точка доступа ESP32-GPS остаётся включённой. Для NTP подключите ESP32 к Wi-Fi роутеру с доступом в интернет.</p>
+<label for="wifiSsid">Имя Wi-Fi сети (SSID)</label><input id="wifiSsid" maxlength="32" autocomplete="off" placeholder="SSID">
+<label for="wifiPassword">Пароль Wi-Fi</label><input id="wifiPassword" type="password" maxlength="63" autocomplete="new-password" placeholder="Пароль">
+<button onclick="saveWifiNetwork()">Подключить и сохранить</button><div id="networkStatus" class="small">Проверка…</div>
 </div>
 <div class="card">
 <h2>Загрузка новой прошивки</h2>
@@ -726,6 +782,8 @@ document.getElementById('testsTab').classList.toggle('hidden',name!=='tests');
 document.getElementById('ubxTab').classList.toggle('hidden',name!=='ubx');
 document.getElementById('pointsTab').classList.toggle('hidden',name!=='points');
 document.getElementById('aiTab').classList.toggle('hidden',name!=='ai');
+document.getElementById('satTab').classList.toggle('hidden',name!=='sat');
+document.getElementById('tabSatBtn').classList.toggle('active',name==='sat');
 document.getElementById('tabGpsBtn').classList.toggle('active',name==='gps');
 document.getElementById('tabImuBtn').classList.toggle('active',name==='imu');
 document.getElementById('tabTestsBtn').classList.toggle('active',name==='tests');
@@ -735,6 +793,8 @@ document.getElementById('tabAiBtn').classList.toggle('active',name==='ai');
 if(name==='gps'){
   if(map) setTimeout(()=>map.invalidateSize(),150);
 }
+if(name==='sat') refreshSatellites();
+if(name==='device') refreshNetworkStatus();
 if(name==='tests') refreshUart();
 if(name==='device'){document.getElementById('rebootStatus').textContent='Контроллер работает';loadFirmwareInfo();}
 if(name==='ubx' && !document.getElementById('ubxFields').children.length) selectUbxPage('gnss');
@@ -899,6 +959,39 @@ document.getElementById('gsvSnrValue').textContent=d.gsv_snr_count?Number(d.gsv_
   document.getElementById('status').textContent='Используется: '+(d.sat??0)+' | видно: '+(d.sat_visible??0)+' | HDOP: '+d.hdop+' | обновлено '+Math.round(d.age_ms/1000)+' с назад';
   if(map) updateLeafletPoint(lat,lng);
 }catch(e){}
+}
+async function refreshNetworkStatus(){
+ try{const d=await (await fetch('/network/status?ts='+Date.now(),{cache:'no-store'})).json();
+ document.getElementById('networkStatus').textContent=(d.sta_connected?'Wi-Fi подключён: '+d.ssid+' · IP '+d.ip:'Wi-Fi не подключён')+' · NTP: '+(d.time_synced?'синхронизировано '+d.utc:'ожидание синхронизации');
+ if(d.ssid)document.getElementById('wifiSsid').value=d.ssid;
+ }catch(e){document.getElementById('networkStatus').textContent='Ошибка сети: '+e.message;}
+}
+async function saveWifiNetwork(){
+ const ssid=document.getElementById('wifiSsid').value, password=document.getElementById('wifiPassword').value;
+ const status=document.getElementById('networkStatus');status.textContent='Подключаюсь…';
+ try{const r=await fetch('/network/config?ssid='+encodeURIComponent(ssid)+'&password='+encodeURIComponent(password),{method:'POST'});const d=await r.json();if(!r.ok)throw new Error(d.error||('HTTP '+r.status));status.textContent=d.message;setTimeout(refreshNetworkStatus,3000);}
+ catch(e){status.textContent='Ошибка: '+e.message;}
+}
+async function refreshSatellites(){
+ try{
+ const d=await (await fetch('/satellites?ts='+Date.now(),{cache:'no-store'})).json(), sats=d.satellites||[];
+ const svg=document.getElementById('skyPlot'), ns='http://www.w3.org/2000/svg';
+ svg.querySelectorAll('.sat-point').forEach(e=>e.remove());
+ sats.forEach(s=>{
+ const r=140*(90-Number(s.elevation))/90,a=Number(s.azimuth)*Math.PI/180,x=160+r*Math.sin(a),y=160-r*Math.cos(a);
+ const c=document.createElementNS(ns,'circle');c.setAttribute('cx',x);c.setAttribute('cy',y);c.setAttribute('r','7');c.setAttribute('fill',s.snr==null?'#94a3b8':s.snr>=38?'#22c55e':s.snr>=28?'#eab308':'#ef4444');c.setAttribute('stroke',s.used?'#fff':'#111827');c.setAttribute('stroke-width',s.used?'2.5':'1');c.setAttribute('class','sat-point');
+ const title=document.createElementNS(ns,'title');title.textContent=s.system+s.prn+' · '+s.elevation+'° / '+s.azimuth+'° · SNR '+(s.snr??'—')+' · '+(s.used?'используется':'виден');c.appendChild(title);svg.appendChild(c);
+ const label=document.createElementNS(ns,'text');label.setAttribute('x',x+8);label.setAttribute('y',y-7);label.setAttribute('fill','#fff');label.setAttribute('font-size','9');label.setAttribute('class','sat-point');label.textContent=s.prn;svg.appendChild(label);
+ });
+ document.getElementById('satSummary').textContent='Видно: '+sats.length+' · Используется по GGA: '+d.used_gga;
+ const bars=document.getElementById('snrBars');bars.innerHTML='';const max=Math.max(45,...sats.map(s=>Number(s.snr)||0)),bw=sats.length?Math.min(22,320/sats.length):18;
+ sats.forEach((s,i)=>{const x=30+i*(320/Math.max(1,sats.length)),v=Number(s.snr)||0,h=v/max*125;
+ const rect=document.createElementNS(ns,'rect');rect.setAttribute('x',x);rect.setAttribute('y',140-h);rect.setAttribute('width',Math.max(5,bw-3));rect.setAttribute('height',h);rect.setAttribute('rx','3');rect.setAttribute('fill',s.snr==null?'#64748b':v>=38?'#22c55e':v>=28?'#eab308':'#ef4444');bars.appendChild(rect);
+ const t=document.createElementNS(ns,'text');t.setAttribute('x',x+bw/2);t.setAttribute('y','157');t.setAttribute('fill','#cbd5e1');t.setAttribute('font-size','9');t.setAttribute('text-anchor','middle');t.textContent=s.prn;bars.appendChild(t);});
+ const list=document.getElementById('satelliteList');
+ if(!sats.length){list.textContent='Спутники пока не получены. Ожидание GSV.';return;}
+ list.innerHTML='<div style="display:grid;grid-template-columns:45px 40px 50px 50px 45px 1fr;gap:5px;font-size:12px"><b>Сист.</b><b>PRN</b><b>Выс.</b><b>Азим.</b><b>SNR</b><b>Статус</b>'+sats.map(s=>'<span>'+s.system+'</span><span>'+s.prn+'</span><span>'+s.elevation+'°</span><span>'+s.azimuth+'°</span><span>'+(s.snr??'—')+'</span><span>'+(s.used?'Используется':'Виден')+'</span>').join('')+'</div>';
+ }catch(e){document.getElementById('satSummary').textContent='Ошибка: '+e.message;}
 }
 async function loadFirmwareInfo(){
  const out=document.getElementById('firmwareInfo');out.textContent='Чтение данных устройства…';
@@ -1384,6 +1477,8 @@ setInterval(()=>{if(!document.getElementById('imuTab').classList.contains('hidde
 setInterval(()=>{if(!document.getElementById('testsTab').classList.contains('hidden'))refreshUart();},500);
 setInterval(()=>{if(!document.getElementById('ubxTab').classList.contains('hidden'))refreshUbxStatus();},500);
 setInterval(()=>{if(!document.getElementById('aiTab').classList.contains('hidden'))refreshAi();},1000);
+setInterval(()=>{if(!document.getElementById('satTab').classList.contains('hidden'))refreshSatellites();},1500);
+setInterval(()=>{if(!document.getElementById('deviceTab').classList.contains('hidden'))refreshNetworkStatus();},5000);
 selectUbxPage('gnss');
 loadMaps();
 refreshGps();
@@ -1526,8 +1621,14 @@ void handleAiDataset() {
 void handleSituationLogging() {
   const bool enabled = server.arg("enabled") == "1";
   if (enabled && !sdReady) { server.send(503, "application/json", R"({"enabled":false,"error":"microSD недоступна"})"); return; }
+  if (enabled) {
+    if (SD_MMC.exists("/situation_log.csv")) SD_MMC.remove("/situation_log.csv");
+    File fresh = SD_MMC.open("/situation_log.csv", FILE_WRITE);
+    if (!fresh) { server.send(500, "application/json", R"({"enabled":false,"error":"Не удалось создать журнал"})"); return; }
+    fresh.println("timestamp_utc,time_status,uptime_ms,fix,sat_used,sat_visible,hdop,gsv_snr_avg,gps_speed_mps,anomaly,mismatch,verdict,reasons");
+    fresh.close(); lastSituationLogMs = 0;
+  }
   situationLoggingEnabled = enabled;
-  if (enabled) lastSituationLogMs = 0;
   JsonDocument doc; doc["enabled"] = enabled; String out; serializeJson(doc, out);
   server.send(200, "application/json", out);
 }
@@ -1552,7 +1653,11 @@ void writeSituationLog() {
   if (lastSituationLogMs && now - lastSituationLogMs < (unsigned long)reportIntervalSeconds * 1000UL) return;
   lastSituationLogMs = now;
   File file = SD_MMC.open("/situation_log.csv", FILE_APPEND); if (!file) return;
-  if (file.size() == 0) file.println("uptime_ms,fix,sat_used,sat_visible,hdop,gsv_snr_avg,gps_speed_mps,anomaly,mismatch,verdict,reasons");
+  time_t epoch = time(nullptr);
+  char timestamp[24] = "NOT_SYNCED";
+  const bool timeValid = epoch > 1700000000;
+  if (timeValid) { struct tm utc; gmtime_r(&epoch, &utc); strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &utc); }
+  if (file.size() == 0) file.println("timestamp_utc,time_status,uptime_ms,fix,sat_used,sat_visible,hdop,gsv_snr_avg,gps_speed_mps,anomaly,mismatch,verdict,reasons");
   String verdict = haveFix ? "Оценка GNSS" : "Нет актуального фикса";
   String reasons;
   if (!haveFix) reasons = "Нет актуального фикса; оценка ограничена";
@@ -1563,7 +1668,10 @@ void writeSituationLog() {
   else if (!aiMonitor.trained()) { verdict = "Накопление профиля"; reasons = "Недостаточно интервалов для статистики"; }
   else { verdict = "Явных отклонений не выявлено"; reasons = "Фикс актуален; статистика GNSS без выраженных отклонений; проверка скорости/перемещения не сработала. Это не исключает спуффинг."; }
   verdict.replace(',', ';'); reasons.replace(',', ';');
-  file.printf("%lu,%u,%d,%d,%.2f,%.2f,%.2f,%u,%u,\"%s\",\"%s\"\n", now, haveFix?1U:0U, satellites, satellitesVisible, hdop, gsvSnrCount?avgGsvSnr:NAN, gps.speed.isValid()?gps.speed.mps():NAN, aiMonitor.anomaly()?1U:0U, aiMonitor.mismatch()?1U:0U, verdict.c_str(), reasons.c_str());
+  file.printf("%s,%s,%lu,%u,%d,%d,%.2f,%.2f,%.2f,%u,%u,\"%s\",\"%s\"\n",
+    timestamp, timeValid ? "NTP_SYNCED" : "NOT_SYNCED", now, haveFix?1U:0U, satellites,
+    satellitesVisible, hdop, gsvSnrCount?avgGsvSnr:NAN, gps.speed.isValid()?gps.speed.mps():NAN,
+    aiMonitor.anomaly()?1U:0U, aiMonitor.mismatch()?1U:0U, verdict.c_str(), reasons.c_str());
   file.close();
 }
 void handleMaps() {
@@ -1932,6 +2040,48 @@ static String firmwareResetReason() {
   }
 }
 
+void handleSatellites() {
+  JsonDocument doc;
+  JsonArray items = doc["satellites"].to<JsonArray>();
+  uint32_t now = millis();
+  for (uint8_t i = 0; i < satelliteInfoCount; ++i) {
+    SatelliteInfo& sat = satelliteInfo[i];
+    if (now - sat.lastSeen > 12000) continue;
+    JsonObject item = items.add<JsonObject>();
+    item["system"] = sat.system; item["prn"] = sat.prn;
+    item["elevation"] = sat.elevation; item["azimuth"] = sat.azimuth;
+    if (sat.snrValid) item["snr"] = sat.snr; else item["snr"] = nullptr;
+    item["used"] = sat.used; item["age_ms"] = now - sat.lastSeen;
+  }
+  doc["visible"] = items.size(); doc["used_gga"] = satellites;
+  doc["receiver"] = "u-blox NEO-6M / GY-NEO-6M-V2";
+  doc["spectrum_available"] = false;
+  String out; serializeJson(doc, out); server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json; charset=utf-8", out);
+}
+
+void handleNetworkConfig() {
+  String ssid = server.arg("ssid"), password = server.arg("password"); ssid.trim();
+  if (!ssid.length() || ssid.length() > 32 || password.length() > 63) {
+    server.send(400, "application/json", R"({"ok":false,"error":"Укажите SSID и пароль до 63 символов"})"); return;
+  }
+  preferences.putString("wifi_ssid", ssid); preferences.putString("wifi_pass", password);
+  WiFi.mode(WIFI_AP_STA); WiFi.begin(ssid.c_str(), password.c_str());
+  ntpConfigured = false;
+  server.send(200, "application/json", R"({"ok":true,"message":"Настройки сохранены; подключение выполняется"})");
+}
+void handleNetworkStatus() {
+  JsonDocument doc;
+  doc["sta_connected"] = WiFi.status() == WL_CONNECTED;
+  doc["ssid"] = WiFi.status() == WL_CONNECTED ? WiFi.SSID() : preferences.getString("wifi_ssid", "");
+  doc["ip"] = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "";
+  time_t epoch = time(nullptr); bool valid = epoch > 1700000000;
+  doc["time_synced"] = valid;
+  if (valid) { struct tm utc; gmtime_r(&epoch, &utc); char stamp[24]; strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%SZ", &utc); doc["utc"] = stamp; }
+  String out; serializeJson(doc, out); server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", out);
+}
+
 void handleFirmwareInfo() {
   JsonDocument doc;
   const esp_app_desc_t* app = esp_app_get_description();
@@ -1945,7 +2095,8 @@ void handleFirmwareInfo() {
   char hash[65] = {0};
   if (app) {
     for (int i=0;i<32;i++) snprintf(hash+i*2,3,"%02x",app->app_elf_sha256[i]);
-    doc["app_version"]=app->version; doc["build_date"]=app->date; doc["build_time"]=app->time;
+    doc["app_version"]=app->version; doc["build_date"]=FIRMWARE_BUILD_DATE; doc["build_time"]=FIRMWARE_BUILD_TIME;
+    doc["build_timestamp_utc"]=FIRMWARE_BUILD_TIMESTAMP;
     doc["project"]=app->project_name; doc["idf_version"]=app->idf_ver;
   }
   doc["firmware_version"]=FIRMWARE_VERSION; doc["git_commit"]=FIRMWARE_GIT_SHA; doc["elf_sha256"]=hash;
@@ -2134,10 +2285,16 @@ void setup() {
     Serial.println("SD card not mounted");
   }
 
-  WiFi.mode(WIFI_AP);
+  WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(AP_SSID, AP_PASS);
+  String savedSsid = preferences.getString("wifi_ssid", "");
+  String savedPass = preferences.getString("wifi_pass", "");
+  if (savedSsid.length()) WiFi.begin(savedSsid.c_str(), savedPass.c_str());
 
   server.on("/", HTTP_GET, handleRoot);
+  server.on("/satellites", HTTP_GET, handleSatellites);
+  server.on("/network/config", HTTP_POST, handleNetworkConfig);
+  server.on("/network/status", HTTP_GET, handleNetworkStatus);
   server.on("/coords", HTTP_GET, handleCoords);
   server.on("/system/reboot", HTTP_POST, handleSystemReboot);
   server.on("/firmware/info", HTTP_GET, handleFirmwareInfo);
@@ -2277,6 +2434,13 @@ void sendNmeaSimulatorFrame() {
 
 void loop() {
   server.handleClient();
+
+  if (WiFi.status() == WL_CONNECTED && !ntpConfigured) {
+    configTime(0, 0, "pool.ntp.org", "time.google.com", "time.nist.gov");
+    ntpConfigured = true;
+    Serial.println("NTP synchronization configured (UTC)");
+  }
+  if (WiFi.status() != WL_CONNECTED && ntpConfigured) ntpConfigured = false;
 
   if (haveFix && millis() - lastFixMs > (unsigned long)fixTimeoutSeconds * 1000UL) {
     haveFix = false;
