@@ -709,47 +709,96 @@ void handleRoot() {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ESP32 GNSS + IMU</title>
+<title>GNSS Control — ESP32-S3</title>
 <style>
-body{margin:0;padding:64px 12px 12px;background:#111;color:#eee;font-family:system-ui,sans-serif}
-.app-shell{display:block;min-width:0}.app-content{width:100%;min-width:0}.top-menu{position:fixed;z-index:2000;right:12px;top:10px}.menu-toggle{width:44px;height:44px;border-radius:12px;background:#2f81f7;color:white;font-size:21px;padding:0;box-shadow:0 4px 16px #0008}.tabs{display:none;position:absolute;right:0;top:50px;width:210px;max-height:calc(100vh - 70px);overflow-y:auto;flex-direction:column;gap:6px;padding:10px;background:#1c1c1c;border:1px solid #444;border-radius:12px;box-shadow:0 8px 28px #000b}.tabs.open{display:flex}.tab{width:100%;text-align:left;padding:11px 12px;border-radius:8px;background:#333;color:#eee;border:0;font-size:14px}.tab.active{background:#2f81f7;color:#fff}.fix-badge{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;font-weight:700;margin:8px 0}.fix-badge:before{content:'';width:10px;height:10px;border-radius:50%;background:currentColor}.fix-badge.has-fix{color:#37d67a;background:#123522}.fix-badge.no-fix{color:#ff6262;background:#3b1919}.map-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.map-status{min-height:22px;padding:9px 10px;margin-top:8px;border-radius:8px;background:#252525;color:#ddd;font-size:13px}.map-status.good{color:#58e18b}.map-status.error{color:#ff7777}.map-status.loading{color:#ffd166}
-.card{background:#1c1c1c;border-radius:14px;padding:16px;margin-bottom:12px}
-.metric{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #333;color:#aaa}
-.metric strong{color:#fff;font:600 18px ui-monospace,monospace}
-.gps-card .coords{margin-top:14px;color:#8ab4ff}
-.coords,.imu{font-family:monospace;font-size:15px;word-break:break-word;white-space:pre-wrap;line-height:1.5}
-#uartStats,#uartLast,#uartRecent{font-size:13px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
-#uartRecent{min-height:72px;max-height:220px;overflow:auto;background:#151515;border-radius:8px;padding:10px;box-sizing:border-box}#uartStats,#uartLast{min-height:0;max-height:180px;overflow:auto;box-sizing:border-box}.uart-monitor{min-height:0;max-height:none;overflow:visible;box-sizing:border-box;display:flex;flex-direction:column;gap:8px}.uart-monitor pre{flex:0 1 auto;width:100%;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
-button{padding:10px 14px;border:0;border-radius:8px;background:#2f81f7;color:#fff;font-size:15px;margin:4px 4px 0 0}
-button.gray{background:#555}
-.map-controls{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.map-controls select{flex:1;min-width:180px}.map-progress{display:flex;gap:10px;align-items:center;font-size:12px;color:#bbb;margin:6px 0}.map-progress progress{flex:1;height:10px;min-width:80px}#map{height:50vh;border-radius:12px}
-.small{color:#aaa;font-size:13px}
-.hidden{display:none}
-select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;border:1px solid #444;max-width:100%;box-sizing:border-box}
-.ubx-layout{display:grid;grid-template-columns:minmax(150px,220px) 1fr;gap:14px;margin-top:14px}
-.ubx-nav{display:flex;flex-direction:column;gap:5px}.ubx-nav-item{text-align:left;background:#292929;margin:0}.ubx-nav-item.active{background:#245ca5}
-.ubx-panel{min-width:0;background:#171717;border-radius:10px;padding:14px}
-.ubx-field{display:grid;grid-template-columns:minmax(130px,1fr) minmax(120px,1fr);gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid #333}
-.ubx-field label{color:#bbb}.ubx-field input,.ubx-field select{width:100%}.ubx-checks{display:flex;flex-wrap:wrap;gap:14px}.ubx-checks label{display:flex;gap:6px;align-items:center}
-.ubx-actions{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}
-@media(max-width:650px){body{padding:6px;padding-top:62px}.top-menu{right:8px;top:8px}.tabs{width:min(240px,calc(100vw - 24px))}.ubx-layout{grid-template-columns:1fr}.ubx-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.ubx-nav-item{font-size:12px;padding:8px}.ubx-field{grid-template-columns:1fr}#map{height:42vh}}
-
+:root{color-scheme:dark;--bg:#0b1220;--surface:#111c2d;--surface-2:#172438;--surface-3:#1c2b40;--line:#26374d;--text:#edf4fb;--muted:#91a3b8;--accent:#35c6b0;--accent-2:#1d9f91;--blue:#62a5ff;--good:#48d597;--warn:#f4bd62;--bad:#ff777f;--radius:16px;--shadow:0 12px 32px #0003}
+*{box-sizing:border-box}
+html{background:var(--bg);scroll-behavior:smooth}
+body{margin:0;padding:24px 28px 40px 276px;background:radial-gradient(ellipse at 85% -15%,#18334b 0,transparent 42%),var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;font-size:14px;line-height:1.55;min-height:100vh}
+.app-shell{display:block;min-width:0;max-width:1500px;margin:0 auto}.app-content{width:100%;min-width:0}
+.top-menu{position:fixed;z-index:2000;left:0;top:0;bottom:0;width:248px;padding:24px 16px 18px;background:#0d1726;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:26px}
+.brand{display:flex;align-items:center;gap:12px;padding:2px 8px 18px;border-bottom:1px solid var(--line)}
+.brand-mark{width:40px;height:40px;border-radius:13px;background:linear-gradient(145deg,#42d4bd,#218b9a);display:grid;place-items:center;color:#062a30;font-size:24px;font-weight:800;box-shadow:0 6px 18px #1bb9a533}
+.brand-name{font-weight:800;font-size:13px;letter-spacing:.12em}.brand-sub{font-size:11px;color:var(--muted);margin-top:2px}
+.menu-toggle{display:none}
+.tabs{display:flex;flex-direction:column;gap:5px;overflow-y:auto;min-height:0}
+.nav-label{padding:8px 12px 5px;color:#627991;font-size:10px;font-weight:800;letter-spacing:.14em}
+.tab{width:100%;display:flex;align-items:center;gap:12px;text-align:left;padding:11px 12px;border-radius:11px;background:transparent;color:#a9b9ca;border:1px solid transparent;font-size:13px;font-weight:600;margin:0;transition:background .18s,border-color .18s,color .18s}
+.tab:hover{background:#17263a;color:#fff}.tab.active{background:linear-gradient(90deg,#173e49,#173143);border-color:#245b63;color:#eafffb;box-shadow:inset 3px 0 var(--accent)}
+.nav-icon{width:22px;text-align:center;font-size:17px;color:#83a1ba;flex:none}.tab.active .nav-icon{color:var(--accent)}
+.sidebar-footer{margin-top:auto;padding:13px 10px;border-top:1px solid var(--line);display:flex;gap:9px;align-items:center;color:var(--muted);font-size:11px}.sidebar-dot{color:var(--good);font-size:12px}
+.page-header{display:flex;align-items:center;justify-content:space-between;gap:18px;margin:4px 0 24px;padding:0 2px 18px;border-bottom:1px solid var(--line)}
+.page-eyebrow{color:var(--accent);font-size:10px;font-weight:800;letter-spacing:.16em;margin-bottom:5px}
+.page-header h1{font-size:27px;line-height:1.2;letter-spacing:-.035em;margin:0;font-weight:750}
+.page-header p{margin:6px 0 0;color:var(--muted);font-size:13px}
+.header-chip{display:inline-flex;align-items:center;gap:8px;white-space:nowrap;border:1px solid #2b4658;background:#13283a;padding:8px 12px;border-radius:999px;color:#c5d9e8;font-size:11px;font-weight:700}.header-chip span{color:var(--accent);font-size:10px}
+.card{background:linear-gradient(155deg,#142237,#101b2b 75%);border:1px solid var(--line);border-radius:var(--radius);padding:20px;margin:0 0 16px;box-shadow:var(--shadow);min-width:0}
+.card h2{font-size:17px;letter-spacing:-.02em;margin:0 0 14px;font-weight:700}.card h3{font-size:14px;margin:16px 0 8px;font-weight:700;color:#dce9f5}
+.metric{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:12px 2px;border-bottom:1px solid #26364a;color:var(--muted);font-size:13px}
+.metric:last-child{border-bottom:0}.metric strong{color:#f1f7ff;font:650 16px ui-monospace,SFMono-Regular,Menlo,monospace;text-align:right;overflow-wrap:anywhere}
+.gps-card{background:linear-gradient(135deg,#142b3b,#142237 55%,#10202e);border-color:#2b5261}
+.gps-card .coords{margin-top:14px;color:#8edbd1;font-size:16px;font-weight:650}
+.coords,.imu{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;word-break:break-word;white-space:pre-wrap;line-height:1.65;color:#b8c9da}
+#uartStats,#uartLast,#uartRecent{font-size:12px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+#uartRecent{min-height:72px;max-height:220px;overflow:auto;background:#0b1522;border:1px solid var(--line);border-radius:10px;padding:12px}#uartStats,#uartLast{min-height:0;max-height:180px;overflow:auto;box-sizing:border-box}.uart-monitor{min-height:0;max-height:none;overflow:visible;box-sizing:border-box;display:flex;flex-direction:column;gap:9px}.uart-monitor pre{flex:0 1 auto;width:100%;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+.fix-badge{display:inline-flex;align-items:center;gap:9px;padding:8px 13px;border-radius:999px;font-weight:800;font-size:11px;letter-spacing:.06em;margin:4px 0 12px}.fix-badge:before{content:'';width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 12px currentColor}.fix-badge.has-fix{color:var(--good);background:#12352d;border:1px solid #24644f}.fix-badge.no-fix{color:var(--bad);background:#3a2029;border:1px solid #6a3540}
+.small{color:var(--muted);font-size:12px;line-height:1.6}
+button{padding:10px 15px;border:1px solid #2b78a0;border-radius:10px;background:linear-gradient(180deg,#287fb2,#21648f);color:#fff;font-size:13px;font-weight:650;margin:5px 5px 0 0;cursor:pointer;transition:filter .15s,transform .15s}
+button:hover{filter:brightness(1.12)}button:active{transform:translateY(1px)}button.gray{background:#24354a;border-color:#354b63;color:#d7e3ef}button.danger{background:#873b4b;border-color:#a94a5a}
+select,input,textarea{padding:10px 12px;border-radius:10px;background:#0c1725;color:var(--text);border:1px solid #344960;max-width:100%;box-sizing:border-box;font:inherit;min-height:40px}
+select:focus,input:focus,textarea:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+label{display:block;color:#b7c8d9;font-size:12px;font-weight:650;margin:12px 0 5px}
+.map-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.map-status{min-height:22px;padding:10px 12px;margin-top:10px;border-radius:10px;background:#0c1725;border:1px solid var(--line);color:#c9d7e5;font-size:12px}.map-status.good{color:var(--good)}.map-status.error{color:var(--bad)}.map-status.loading{color:var(--warn)}
+.map-controls{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.map-controls select{flex:1;min-width:180px}#map{height:52vh;min-height:300px;border-radius:13px;border:1px solid var(--line);overflow:hidden}
+.map-progress{display:flex;gap:10px;align-items:center;font-size:11px;color:var(--muted);margin:8px 0}.map-progress progress{flex:1;height:9px;min-width:80px;accent-color:var(--accent)}
+.hidden{display:none!important}
+.ubx-layout{display:grid;grid-template-columns:minmax(160px,220px) minmax(0,1fr);gap:14px;margin-top:14px}.ubx-nav{display:flex;flex-direction:column;gap:5px}.ubx-nav-item{text-align:left;background:#1b2b40;border:1px solid #2b4058;margin:0}.ubx-nav-item.active{background:#1c5360;border-color:#327e83}.ubx-panel{min-width:0;background:#0e1a29;border:1px solid var(--line);border-radius:12px;padding:16px}.ubx-field{display:grid;grid-template-columns:minmax(130px,1fr) minmax(120px,1fr);gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #26364a}.ubx-field label{color:#b7c8d9;margin:0}.ubx-field input,.ubx-field select{width:100%}.ubx-checks{display:flex;flex-wrap:wrap;gap:14px}.ubx-checks label{display:flex;gap:6px;align-items:center}.ubx-actions{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}
+details{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#0d1927}summary{cursor:pointer;color:#a9bfd2;font-size:12px}
+pre{max-width:100%;overflow:auto}progress{accent-color:var(--accent)}
+a{color:#75cfc4}hr{border:0;border-top:1px solid var(--line)}
+@media(min-width:1500px){.app-content{max-width:1280px}.card{padding:22px}}
+@media(max-width:760px){
+ body{padding:14px 12px 94px;background:var(--bg)}
+ .top-menu{top:auto;bottom:0;left:0;right:0;width:100%;height:72px;padding:7px 8px max(7px,env(safe-area-inset-bottom));border-right:0;border-top:1px solid #2a3c50;background:#0b1625f5;backdrop-filter:blur(16px);display:block}
+ .brand,.sidebar-footer,.menu-toggle,.nav-label{display:none}
+ .tabs{height:100%;display:flex;flex-direction:row;align-items:center;gap:5px;overflow-x:auto;overflow-y:hidden;padding:0 2px;scrollbar-width:none}
+ .tabs::-webkit-scrollbar{display:none}
+ .tab{width:auto;min-width:64px;flex:1 0 auto;max-width:105px;min-height:54px;padding:6px 8px;display:flex;flex-direction:column;justify-content:center;gap:1px;text-align:center;font-size:10px;line-height:1.2;border-radius:10px;white-space:normal}
+ .nav-icon{font-size:17px;width:auto;line-height:1.2}
+ .tab.active{box-shadow:inset 0 2px var(--accent)}
+ .page-header{margin:2px 0 16px;padding-bottom:13px;align-items:flex-start}
+ .page-header h1{font-size:23px}.page-header p{font-size:12px;max-width:270px}
+ .header-chip{font-size:10px;padding:7px 9px}
+ .card{padding:15px;margin-bottom:12px;border-radius:14px}
+ .card h2{font-size:16px}.metric{padding:10px 0;font-size:12px}.metric strong{font-size:14px}
+ .ubx-layout{grid-template-columns:1fr}.ubx-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.ubx-nav-item{font-size:11px;padding:8px}.ubx-field{grid-template-columns:1fr}
+ #map{height:43vh;min-height:250px}
+}
+@media(max-width:390px){body{padding-left:9px;padding-right:9px}.header-chip{display:none}.tab{min-width:59px;padding-left:5px;padding-right:5px}.page-header h1{font-size:21px}}
 </style>
 </head>
 <body>
 <div class="app-shell">
-<div class="top-menu"><button class="menu-toggle" id="menuToggle" aria-label="Открыть меню" onclick="toggleMenu()">☰</button>
-<div class="tabs" id="mainMenu">
-<button id="tabGpsBtn" class="tab active" onclick="showTab('gps')">Главная</button>
-<button id="tabImuBtn" class="tab" onclick="showTab('imu')">IMU</button>
-<button id="tabTestsBtn" class="tab" onclick="showTab('tests')">Тесты</button>
-<button id="tabUbxBtn" class="tab" onclick="showTab('ubx')">u-blox</button>
-<button id="tabPointsBtn" class="tab" onclick="showTab('points')">Точки</button>
-<button id="tabAiBtn" class="tab" onclick="showTab('ai')">AI / ML</button>
-<button id="tabSatBtn" class="tab" onclick="showTab('sat')">Спутники и сигнал</button>
-<button id="tabDeviceBtn" class="tab" onclick="showTab('device')">Устройство</button>
-</div></div>
+<aside class="top-menu">
+<div class="brand"><div class="brand-mark">⌖</div><div><div class="brand-name">GNSS CONTROL</div><div class="brand-sub">ESP32-S3 · NEO-6M</div></div></div>
+<button class="menu-toggle" id="menuToggle" aria-label="Открыть меню" onclick="toggleMenu()">☰</button>
+<nav class="tabs" id="mainMenu" aria-label="Основная навигация">
+<div class="nav-label">МОНИТОРИНГ</div>
+<button id="tabGpsBtn" class="tab active" onclick="showTab('gps')"><span class="nav-icon">⌖</span><span>Обзор</span></button>
+<button id="tabSatBtn" class="tab" onclick="showTab('sat')"><span class="nav-icon">◉</span><span>Спутники и сигнал</span></button>
+<button id="tabPointsBtn" class="tab" onclick="showTab('points')"><span class="nav-icon">⌖</span><span>Сохранённые точки</span></button>
+<div class="nav-label">ИНСТРУМЕНТЫ</div>
+<button id="tabImuBtn" class="tab" onclick="showTab('imu')"><span class="nav-icon">◌</span><span>Датчики IMU</span></button>
+<button id="tabAiBtn" class="tab" onclick="showTab('ai')"><span class="nav-icon">⌁</span><span>Аналитика AI / ML</span></button>
+<button id="tabTestsBtn" class="tab" onclick="showTab('tests')"><span class="nav-icon">⌕</span><span>Диагностика</span></button>
+<div class="nav-label">КОНФИГУРАЦИЯ</div>
+<button id="tabUbxBtn" class="tab" onclick="showTab('ubx')"><span class="nav-icon">⚙</span><span>Настройки u-blox</span></button>
+<button id="tabDeviceBtn" class="tab" onclick="showTab('device')"><span class="nav-icon">▣</span><span>Устройство</span></button>
+</nav>
+<div class="sidebar-footer"><span class="sidebar-dot">●</span><span>Локальная сеть устройства</span></div>
+</aside>
 <main class="app-content">
+<header class="page-header"><div><div class="page-eyebrow">ПАНЕЛЬ УПРАВЛЕНИЯ</div><h1 id="pageTitle">Обзор</h1><p id="pageSubtitle">Положение, качество приёма и состояние GNSS-приёмника</p></div><div class="header-chip"><span>●</span> ESP32-S3</div></header>
 <div id="gpsTab">
 <div class="card gps-card">
 <h2>GNSS — текущее положение</h2>
@@ -901,6 +950,10 @@ let followGps=true, mapLoadToken=0, mapTilesLoaded=0, mapTilesFailed=0;
 function toggleMenu(){document.getElementById('mainMenu').classList.toggle('open');}
 function showTab(name){
 document.getElementById('mainMenu').classList.remove('open');
+const pageMeta={gps:['Обзор','Положение, качество приёма и состояние GNSS-приёмника'],sat:['Спутники и сигнал','Видимость спутников, уровни сигнала и радиосреда'],points:['Сохранённые точки','Ваши отмеченные координаты и места'],imu:['Датчики IMU','Данные акселерометра, гироскопа и калибровка'],ai:['Аналитика AI / ML','Мониторинг навигации, профиль и журналы обучения'],tests:['Диагностика','Проверка UART, координат и аппаратных компонентов'],ubx:['Настройки u-blox','Конфигурация GNSS-приёмника NEO-6M'],device:['Устройство','Сеть, версия прошивки, обновление и перезагрузка']};
+const meta=pageMeta[name]||pageMeta.gps;
+document.getElementById('pageTitle').textContent=meta[0];
+document.getElementById('pageSubtitle').textContent=meta[1];
 document.getElementById('deviceTab').classList.toggle('hidden',name!=='device');
 document.getElementById('tabDeviceBtn').classList.toggle('active',name==='device');
 document.getElementById('gpsTab').classList.toggle('hidden',name!=='gps');
@@ -921,7 +974,7 @@ if(name==='gps'){
   if(map) setTimeout(()=>map.invalidateSize(),150);
 }
 if(name==='sat') refreshSatellites();
-if(name==='device'){refreshNetworkStatus();scanWifiNetworks();}
+if(name==='device'){refreshNetworkStatus();}
 if(name==='tests') refreshUart();
 if(name==='device'){document.getElementById('rebootStatus').textContent='Контроллер работает';loadFirmwareInfo();}
 if(name==='ubx' && !document.getElementById('ubxFields').children.length) selectUbxPage('gnss');
