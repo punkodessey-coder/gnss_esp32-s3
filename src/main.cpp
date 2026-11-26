@@ -31,7 +31,7 @@ const char* AP_PASS = "12345678";
 
 #define GPS_RX_PIN 44
 #define GPS_TX_PIN 43
-#define GPS_BAUD 57600
+#define GPS_BAUD 9600
 
 #define LCD_MOSI 45
 #define LCD_SCLK 40
@@ -67,6 +67,12 @@ SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 HardwareSerial gpsSerial(2);
 HardwareSerial simulatorSerial(1); // NMEA test output: TX GPIO8, RX GPIO9 (unused)
 int gpsBaud = GPS_BAUD;
+static const uint32_t gpsBaudCandidates[] = {9600, 19200, 38400, 57600, 115200, 230400};
+static uint8_t gpsBaudCandidateIndex = 0;
+static bool gpsBaudAutoDetected = false;
+static uint8_t gpsBaudValidSentences = 0;
+static unsigned long gpsBaudCandidateStartedMs = 0;
+static const unsigned long GPS_BAUD_PROBE_MS = 1200;
 String savedPointsJson = "[]";
 String lastUbxFrameHex = "";
 String ubxLastEvent = "Ожидание UBX";
@@ -272,6 +278,8 @@ void readImu() {
 String uartJson() {
   JsonDocument doc;
   doc["baud"] = gpsBaud;
+  doc["baud_auto"] = true;
+  doc["baud_detected"] = gpsBaudAutoDetected;
   doc["rx_pin"] = GPS_RX_PIN;
   doc["tx_pin"] = GPS_TX_PIN;
   doc["bytes_total"] = uartTotalBytes;
@@ -392,6 +400,23 @@ bool validNmeaChecksum(const String& line) {
   return checksum == (uint8_t)strtoul(expected, nullptr, 16);
 }
 
+void gpsAutoBaudTick() {
+  if (gpsBaudAutoDetected || nmeaSimulatorEnabled) return;
+  if (gpsBaudValidSentences >= 2) {
+    gpsBaudAutoDetected = true;
+    Serial.printf("GPS UART baud automatically detected: %d\\n", gpsBaud);
+    return;
+  }
+  if (millis() - gpsBaudCandidateStartedMs < GPS_BAUD_PROBE_MS) return;
+  gpsBaudCandidateIndex = (gpsBaudCandidateIndex + 1) % (sizeof(gpsBaudCandidates) / sizeof(gpsBaudCandidates[0]));
+  gpsBaud = gpsBaudCandidates[gpsBaudCandidateIndex];
+  gpsSerial.updateBaudRate(gpsBaud);
+  gpsBaudCandidateStartedMs = millis();
+  gpsBaudValidSentences = 0;
+  uartCurrentLine = "";
+  ubxFramePos = 0; ubxFrameLength = 0;
+  Serial.printf("GPS UART auto-baud probing: %d\\n", gpsBaud);
+}
 void processNmeaLine(const String& line) {
   if (line.length() < 7 || line[0] != '$' || !validNmeaChecksum(line)) return;
   const String type = line.substring(3, 6);
@@ -821,11 +846,11 @@ select,input,textarea{padding:8px;border-radius:6px;background:#222;color:#eee;b
 </div>
 <div class="card">
 <h2>Интернет и синхронизация времени</h2>
-<p class="small">Точка доступа ESP32-GPS остаётся включённой. Для NTP подключите ESP32 к Wi-Fi роутеру с доступом в интернет.</p>
+<p class="small">При запуске ESP32 работает только собственная точка доступа. Сохранённая внешняя Wi-Fi сеть не подключается автоматически. Сканирование сетей не запускает подключение; оно начнётся только после нажатия кнопки ниже.</p>
 <label for="wifiNetworks">Найденные сети Wi-Fi</label><select id="wifiNetworks" style="width:100%"><option value="">Сначала выполните сканирование</option></select><button class="gray" onclick="scanWifiNetworks()">Сканировать сети</button><button class="gray" onclick="selectWifiNetwork()">Выбрать сеть</button>
 <label for="wifiSsid">Имя Wi-Fi сети (SSID)</label><input id="wifiSsid" maxlength="32" autocomplete="off" placeholder="SSID">
 <label for="wifiPassword">Пароль Wi-Fi</label><input id="wifiPassword" type="password" maxlength="63" autocomplete="new-password" placeholder="Пароль">
-<button onclick="saveWifiNetwork()">Подключить и сохранить</button><div id="networkStatus" class="small">Проверка…</div>
+<button onclick="saveWifiNetwork()">Сохранить и вручную подключиться</button><div id="networkStatus" class="small">Проверка…</div>
 </div>
 <div class="card">
 <h2>Загрузка новой прошивки</h2>
@@ -1476,7 +1501,7 @@ async function refreshUart(){
   try{d=JSON.parse(body);}catch(parseError){throw new Error('Некорректный JSON от /uart: '+body.slice(0,120));}
   if(!d || typeof d.baud!=='number' || typeof d.rx_pin!=='number' || typeof d.tx_pin!=='number') throw new Error('В ответе /uart отсутствуют обязательные поля');
   const age=d.last_byte_age_ms<0?'байтов ещё не было':(d.last_byte_age_ms<1500?'приём идёт':'последний байт '+(d.last_byte_age_ms/1000).toFixed(1)+' с назад');
-  status.textContent=age+' | '+d.baud+' бод | RX GPIO'+d.rx_pin+' / TX GPIO'+d.tx_pin;
+  status.textContent=age+' | '+d.baud+' бод | '+(d.baud_detected?'скорость определена автоматически':'поиск скорости…')+' | RX GPIO'+d.rx_pin+' / TX GPIO'+d.tx_pin;
   document.getElementById('uartStats').textContent='Всего байтов: '+d.bytes_total+'\nСкорость: '+d.bytes_per_second+' байт/с\nChecksum OK: '+d.checksum_passed+'\nОшибок checksum: '+d.checksum_failed+'\nОбработано символов: '+d.chars_processed+'\nОшибок/переполнений строк: '+d.invalid_sentences;
   document.getElementById('uartLast').textContent=d.last_sentence||'Полная строка NMEA ещё не получена';
   document.getElementById('uartRecent').textContent=d.recent||'—';
@@ -1693,7 +1718,9 @@ void handleSetBaud() {
   if (!ok) { server.send(400, "application/json", "{\"ok\":false,\"error\":\"Unsupported baud\"}"); return; }
   gpsSerial.updateBaudRate(baud);
   gpsBaud = baud;
-  simulatorSerial.updateBaudRate(baud);
+  gpsBaudAutoDetected = true;
+  gpsBaudValidSentences = 0;
+  uartCurrentLine = "";
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -2258,7 +2285,7 @@ void handleSatellites() {
 }
 
 void handleWifiScanStart() {
-  if (WiFi.getMode() != WIFI_AP_STA && WiFi.getMode() != WIFI_STA) WiFi.mode(WIFI_AP_STA);
+  // Keep AP mode while scanning; scanning must not initiate a station connection.
   wifiScanStatus = WiFi.scanNetworks(true, true);
   JsonDocument doc; doc["started"] = wifiScanStatus == WIFI_SCAN_RUNNING; doc["status"] = wifiScanStatus;
   if (wifiScanStatus == WIFI_SCAN_FAILED) doc["error"] = "Не удалось запустить сканирование Wi-Fi";
@@ -2304,7 +2331,9 @@ void handleNetworkConfig() {
     server.send(400, "application/json", R"({"ok":false,"error":"Укажите SSID и пароль до 63 символов"})"); return;
   }
   preferences.putString("wifi_ssid", ssid); preferences.putString("wifi_pass", password);
-  WiFi.mode(WIFI_AP_STA); WiFi.begin(ssid.c_str(), password.c_str());
+  // STA mode and connection are enabled only after the user explicitly submits this form.
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.begin(ssid.c_str(), password.c_str());
   ntpConfigured = false;
   server.send(200, "application/json", R"({"ok":true,"message":"Настройки сохранены; подключение выполняется"})");
 }
@@ -2563,7 +2592,10 @@ void setup() {
   }
 
   gpsSerial.begin(gpsBaud, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
-  simulatorSerial.begin(gpsBaud, SERIAL_8N1, 9, 8);
+  gpsBaudCandidateIndex = 0;
+  gpsBaudCandidateStartedMs = millis();
+  simulatorSerial.begin(57600, SERIAL_8N1, 9, 8);
+  Serial.println("GPS UART2 auto-baud detection started (9600..230400)");
   Serial.println("NMEA simulator UART1 ready: TX GPIO8, RX GPIO9, 57600 baud");
 
   SD_MMC.setPins(14, 15, 16, 18, 17, 21); // CLK, CMD, D0, D1, D2, D3
@@ -2575,13 +2607,11 @@ void setup() {
     Serial.println("SD card not mounted");
   }
 
-  WiFi.mode(WIFI_AP_STA);
+  WiFi.mode(WIFI_AP);
   timezoneOffsetMinutes = preferences.getInt("tz_min", 0);
   applyTimezoneOffset(timezoneOffsetMinutes);
   WiFi.softAP(AP_SSID, AP_PASS);
-  String savedSsid = preferences.getString("wifi_ssid", "");
-  String savedPass = preferences.getString("wifi_pass", "");
-  if (savedSsid.length()) WiFi.begin(savedSsid.c_str(), savedPass.c_str());
+  // Saved STA credentials are retained but never connected automatically at boot.
 
   server.on("/", HTTP_GET, handleRoot);
   server.on("/satellites", HTTP_GET, handleSatellites);
@@ -2762,7 +2792,13 @@ void loop() {
     uartTotalBytes++; uartBytesWindow++; uartLastByteMs = millis();
     if (c == '\n') {
       uartCurrentLine.trim();
-      if (uartCurrentLine.length()) processNmeaLine(uartCurrentLine);
+      if (uartCurrentLine.length()) {
+        const int checksumPos = uartCurrentLine.indexOf('*');
+        const String sentenceType = uartCurrentLine.length() >= 6 ? uartCurrentLine.substring(3, 6) : "";
+        const bool recognized = sentenceType == "GGA" || sentenceType == "RMC" || sentenceType == "GSV" || sentenceType == "GSA";
+        if (!gpsBaudAutoDetected && checksumPos > 0 && validNmeaChecksum(uartCurrentLine) && recognized && gpsBaudValidSentences < 2) ++gpsBaudValidSentences;
+        processNmeaLine(uartCurrentLine);
+      }
       if (uartCurrentLine.length()) {
         uartLastLine = uartCurrentLine;
         uartRecentLines += uartCurrentLine + "\n";
@@ -2792,6 +2828,7 @@ void loop() {
     }
   }
 
+  gpsAutoBaudTick();
   if (nmeaSimulatorEnabled) updateSimulatorPosition();
 
   static unsigned long lastImu = 0;
