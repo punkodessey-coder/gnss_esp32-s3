@@ -836,8 +836,7 @@ a{color:#75cfc4}hr{border:0;border-top:1px solid var(--line)}
 <div class="globe-bottom"><div><div class="globe-coordinates" id="globeCoords">ОЖИДАНИЕ КООРДИНАТ</div><div class="globe-location-note" id="globeLocationNote">Жёлтый маркер появится после получения координат</div></div>
 <div class="globe-controls"><button class="primary-globe" onclick="centerGlobeOnGps()">⌖ Моя позиция</button><button onclick="changeGlobeZoom(-1)">−</button><div class="globe-zoom"><span>МАСШТАБ</span><input id="globeZoom" type="range" min="0" max="8" value="0" oninput="setGlobeZoom(this.value)"></div><button onclick="changeGlobeZoom(1)">+</button></div></div>
 </section>
-<div class="card"><h2>Параметры карты</h2>
-<div class="map-controls"><select id="mapSelectUnused">
+<div class="card"><h2>Настройки отображения</h2>
 <div class="map-actions"><button class="gray" onclick="centerOnGps()">К текущей точке</button><span id="followStatus" class="small">Автоцентрирование включено</span></div>
 </div>
 <div class="card"><div class="ubx-field"><label for="fixTimeoutSeconds">Скрывать точку после потери координат (сек.)</label><input id="fixTimeoutSeconds" type="number" min="1" max="60" value="7"></div><button class="gray" onclick="saveFixTimeout()">Сохранить тайм-аут</button><div id="mapStatus" class="map-status">Загрузка карты…</div></div>
