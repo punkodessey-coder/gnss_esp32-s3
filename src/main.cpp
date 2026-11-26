@@ -968,6 +968,34 @@ let currentLat=59.9386,currentLng=30.3141;
 let timezoneConfigured=false, wifiScanBusy=false;
 let followGps=true, mapLoadToken=0, mapTilesLoaded=0, mapTilesFailed=0;
 
+const earthLand=[
+[[-168,70],[-150,72],[-135,60],[-126,50],[-124,40],[-117,32],[-108,28],[-100,20],[-92,18],[-86,22],[-82,26],[-80,32],[-74,40],[-66,45],[-60,52],[-64,60],[-80,67],[-100,72],[-125,74],[-150,72]],
+[[-117,32],[-111,25],[-105,20],[-98,16],[-92,15],[-88,18],[-86,14],[-90,10],[-84,9],[-78,8],[-77,17],[-82,22],[-90,21],[-97,26],[-105,29]],
+[[-81,12],[-72,10],[-62,7],[-51,2],[-46,-7],[-50,-18],[-54,-27],[-60,-38],[-68,-55],[-74,-48],[-76,-32],[-79,-15]],
+[[-11,36],[-10,44],[-5,50],[2,55],[10,58],[18,55],[25,60],[35,63],[45,58],[48,50],[40,44],[32,40],[28,35],[20,36],[14,38],[8,36],[2,39],[-5,36]],
+[[-17,35],[-5,37],[10,37],[23,33],[33,30],[40,12],[50,5],[43,-12],[36,-20],[30,-34],[18,-35],[10,-30],[14,-18],[8,-5],[2,5],[-5,5],[-12,15],[-17,25]],
+[[30,40],[40,48],[50,55],[65,58],[78,68],[95,72],[115,70],[130,60],[145,55],[160,60],[175,52],[165,43],[145,40],[135,35],[125,30],[120,22],[110,18],[105,8],[98,10],[92,20],[85,22],[78,8],[72,7],[67,25],[58,25],[52,32],[45,38]],
+[[43,12],[50,15],[55,22],[58,25],[52,30],[47,28]],[[112,-11],[128,-12],[142,-15],[153,-25],[150,-38],[137,-43],[122,-35],[114,-25]],[[-52,60],[-44,62],[-38,70],[-42,80],[-52,83],[-60,76]],[[130,32],[135,35],[140,42],[145,44],[143,36],[138,33]],[[95,5],[110,0],[120,-5],[130,-5],[125,-10],[115,-8],[105,-5]]
+];
+let globeZoomLevel=0,globeCenterLat=0,globeCenterLng=0,globeCenterInitialized=false,globeFollow=true,globeDrag=null,globeCanvas=null,globeCtx=null,globeDpr=1;
+function globeProject(lon,lat,r,cx,cy){const p=lat*Math.PI/180,dl=(lon-globeCenterLng)*Math.PI/180,cl=globeCenterLat*Math.PI/180,cp=Math.cos(p),sp=Math.sin(p),x=cp*Math.sin(dl),z=cp*Math.cos(dl);return{x:cx+x*r,y:cy-(sp*Math.cos(cl)-z*Math.sin(cl))*r,z:sp*Math.sin(cl)+z*Math.cos(cl)};}
+function drawGlobe(){
+ if(!globeCanvas||!globeCtx)return;const rect=globeCanvas.getBoundingClientRect();if(!rect.width||!rect.height)return;const w=rect.width,h=rect.height;globeDpr=Math.min(window.devicePixelRatio||1,2);const bw=Math.round(w*globeDpr),bh=Math.round(h*globeDpr);if(globeCanvas.width!==bw||globeCanvas.height!==bh){globeCanvas.width=bw;globeCanvas.height=bh;}const c=globeCtx;c.setTransform(globeDpr,0,0,globeDpr,0,0);c.clearRect(0,0,w,h);const cx=w/2,cy=h/2-2,r=Math.min(w*.365,h*.43);
+ for(let i=0;i<34;i++){const x=(i*127.7)%w,y=(i*71.3+17)%h;c.fillStyle='rgba(180,211,230,'+(0.12+(i%4)*.035)+')';c.beginPath();c.arc(x,y,i%3===0?1.1:.55,0,Math.PI*2);c.fill();}
+ c.save();c.shadowColor='rgba(38,157,214,.42)';c.shadowBlur=32;const ocean=c.createRadialGradient(cx-r*.32,cy-r*.42,r*.08,cx,cy,r*1.1);ocean.addColorStop(0,'#397f9e');ocean.addColorStop(.42,'#16415e');ocean.addColorStop(.78,'#0b263d');ocean.addColorStop(1,'#061421');c.fillStyle=ocean;c.beginPath();c.arc(cx,cy,r,0,Math.PI*2);c.fill();c.restore();
+ c.save();c.beginPath();c.arc(cx,cy,r,0,Math.PI*2);c.clip();c.strokeStyle='rgba(151,204,226,.17)';c.lineWidth=.7;
+ for(let lat=-60;lat<=60;lat+=30){c.beginPath();let started=false;for(let lon=-180;lon<=180;lon+=3){const q=globeProject(lon,lat,r,cx,cy);if(q.z>=0){if(!started){c.moveTo(q.x,q.y);started=true;}else c.lineTo(q.x,q.y);}else started=false;}c.stroke();}
+ for(let lon=-150;lon<180;lon+=30){c.beginPath();let started=false;for(let lat=-88;lat<=88;lat+=3){const q=globeProject(lon,lat,r,cx,cy);if(q.z>=0){if(!started){c.moveTo(q.x,q.y);started=true;}else c.lineTo(q.x,q.y);}else started=false;}c.stroke();}
+ for(const poly of earthLand){c.beginPath();let active=false;for(let i=0;i<poly.length;i++){const q=globeProject(poly[i][0],poly[i][1],r,cx,cy);if(q.z>-.025){if(!active){c.moveTo(q.x,q.y);active=true;}else c.lineTo(q.x,q.y);}else active=false;}if(active){c.closePath();const land=c.createLinearGradient(cx,cy-r,cx,cy+r);land.addColorStop(0,'#9dbb9d');land.addColorStop(.5,'#5d8b79');land.addColorStop(1,'#355f5e');c.fillStyle=land;c.fill();c.strokeStyle='rgba(184,220,193,.32)';c.lineWidth=.8;c.stroke();}}
+ const shade=c.createRadialGradient(cx-r*.42,cy-r*.55,r*.1,cx+r*.2,cy+r*.25,r*1.08);shade.addColorStop(0,'rgba(255,255,255,.10)');shade.addColorStop(.55,'rgba(3,13,26,.02)');shade.addColorStop(1,'rgba(0,5,15,.72)');c.fillStyle=shade;c.fillRect(cx-r,cy-r,r*2,r*2);
+ if(currentCoordinatesAvailable){const p=globeProject(currentLng,currentLat,r,cx,cy);if(p.z>0){c.save();c.shadowColor='#ffd34f';c.shadowBlur=20;c.fillStyle='#ffd34f';c.beginPath();c.arc(p.x,p.y,5.5,0,Math.PI*2);c.fill();c.shadowBlur=5;c.strokeStyle='rgba(255,231,155,.95)';c.lineWidth=1.4;c.beginPath();c.arc(p.x,p.y,10,0,Math.PI*2);c.stroke();c.restore();}}
+ c.restore();c.beginPath();c.arc(cx,cy,r,0,Math.PI*2);c.strokeStyle='rgba(128,202,235,.72)';c.lineWidth=1.3;c.stroke();
+}
+function initGlobe(){globeCanvas=document.getElementById('earthCanvas');if(!globeCanvas)return;globeCtx=globeCanvas.getContext('2d');drawGlobe();globeCanvas.addEventListener('pointerdown',e=>{globeDrag={x:e.clientX,y:e.clientY,lon:globeCenterLng,lat:globeCenterLat};globeCanvas.setPointerCapture(e.pointerId);globeFollow=false;});globeCanvas.addEventListener('pointermove',e=>{if(!globeDrag)return;const rect=globeCanvas.getBoundingClientRect();globeCenterLng=globeDrag.lon-(e.clientX-globeDrag.x)/Math.max(1,rect.width)*180;globeCenterLat=Math.max(-80,Math.min(80,globeDrag.lat+(e.clientY-globeDrag.y)/Math.max(1,rect.height)*120));drawGlobe();});const end=()=>{globeDrag=null;};globeCanvas.addEventListener('pointerup',end);globeCanvas.addEventListener('pointercancel',end);globeCanvas.addEventListener('wheel',e=>{e.preventDefault();changeGlobeZoom(e.deltaY<0?1:-1);},{passive:false});window.addEventListener('resize',drawGlobe);}
+function centerGlobeOnGps(){if(!currentCoordinatesAvailable){document.getElementById('globeLocationNote').textContent='Позиция недоступна: ожидаем координаты от GNSS';return;}globeCenterLat=currentLat;globeCenterLng=currentLng;globeCenterInitialized=true;globeFollow=true;drawGlobe();if(globeZoomLevel>=4&&map)map.setView([currentLat,currentLng],Math.max(14,map.getZoom()),{animate:true});}
+function setGlobeZoom(value){globeZoomLevel=Math.max(0,Math.min(8,Number(value)||0));document.getElementById('globeZoom').value=String(globeZoomLevel);const card=document.getElementById('globeCard'),detail=globeZoomLevel>=4;card.classList.toggle('detail-mode',detail);document.getElementById('globeLocationNote').textContent=detail?'Подробная карта · подписи зависят от масштаба и покрытия':'Вращайте глобус или приближайте для перехода к подробной карте';const mapEl=document.getElementById('map'),controls=document.getElementById('mapControls'),progress=document.getElementById('mapProgress');if(detail){mapEl.style.display='block';controls.style.display='flex';progress.style.display='flex';if(map){map.invalidateSize({pan:false});if(currentCoordinatesAvailable)map.setView([currentLat,currentLng],Math.round(5+(globeZoomLevel-4)*3),{animate:false});else map.setZoom(Math.round(5+(globeZoomLevel-4)*3));}}else{mapEl.style.display='none';controls.style.display='none';progress.style.display='none';drawGlobe();}}
+function changeGlobeZoom(delta){setGlobeZoom(globeZoomLevel+delta);}
+
 function toggleMenu(){document.getElementById('mainMenu').classList.toggle('open');}
 function showTab(name){
 document.getElementById('mainMenu').classList.remove('open');
@@ -1018,7 +1046,7 @@ function ensureLeaflet(){
 }
 function initMap(){
   if(typeof L==='undefined'){document.getElementById('mapStatus').textContent='Leaflet не найдена: скопируйте leaflet.js/leaflet.css в /lib на microSD (maps/download_maps.ps1 делает это) или подключите телефон к интернету';return false;}
-  if(!map){map=L.map('map').setView(currentCoordinatesAvailable?[currentLat,currentLng]:[59.9386,30.3141],currentCoordinatesAvailable?16:11);map.on('dragstart',disableGpsFollow);map.getContainer().addEventListener('wheel',disableGpsFollow,{passive:true});}
+  if(!map){map=L.map('map').setView(currentCoordinatesAvailable?[currentLat,currentLng]:[0,0],currentCoordinatesAvailable?16:2);map.on('dragstart',disableGpsFollow);map.getContainer().addEventListener('wheel',disableGpsFollow,{passive:true});}
   return true;
 }
 async function loadMaps(){
@@ -1087,9 +1115,10 @@ async function selectMap(value){
 }
 function updateLeafletPoint(lat,lng){
   if(!map)return;
-  if(!gpsMarker)gpsMarker=L.circleMarker([lat,lng],{radius:6,color:'#ffffff',weight:2,fillColor:currentFix?'#1677ff':'#f59e0b',fillOpacity:1}).addTo(map);
-  else {gpsMarker.setLatLng([lat,lng]);gpsMarker.setStyle({fillColor:currentFix?'#1677ff':'#f59e0b'});}
+  if(!gpsMarker)gpsMarker=L.circleMarker([lat,lng],{radius:6,color:'#ffffff',weight:2,fillColor:'#ffd34f',fillOpacity:1}).addTo(map);
+  else {gpsMarker.setLatLng([lat,lng]);gpsMarker.setStyle({fillColor:'#ffd34f'});}
   if(followGps)map.panTo([lat,lng],{animate:false});
+  if(globeFollow&&globeCenterInitialized&&globeZoomLevel<4){globeCenterLat=lat;globeCenterLng=lng;}
 }
 function removeCurrentMapPoint(){
   if(gpsMarker && map){map.removeLayer(gpsMarker);gpsMarker=null;}
@@ -1149,6 +1178,10 @@ document.getElementById('gsvSnrValue').textContent=d.gsv_snr_count?Number(d.gsv_
   document.getElementById('coords').textContent=hasCoords?lat.toFixed(6)+', '+lng.toFixed(6):'Координаты ещё не получены';
   currentFix=!!d.valid; currentCoordinatesAvailable=hasCoords;
   if(hasCoords){currentLat=lat;currentLng=lng;}
+  const globeFix=document.getElementById("globeFix");globeFix.textContent=d.valid?"GPS FIX":"КООРДИНАТЫ БЕЗ FIX";globeFix.classList.toggle("active",!!d.valid);
+  document.getElementById("globeCoords").textContent=hasCoords?lat.toFixed(6)+"°, "+lng.toFixed(6)+"°":"ОЖИДАНИЕ КООРДИНАТ";
+  document.getElementById("globeLocationNote").textContent=hasCoords?(d.valid?"Текущая позиция GNSS · "+(d.sat??0)+" спутников":"Координаты получены, но FIX не подтверждён"):"Маркер появится только после получения координат";
+  if(hasCoords&&!globeCenterInitialized){globeCenterLat=lat;globeCenterLng=lng;globeCenterInitialized=true;}drawGlobe();
   const badge=document.getElementById('fixBadge');badge.textContent=d.valid?'GPS FIX':'НЕТ ФИКСА';badge.className='fix-badge '+(d.valid?'has-fix':'no-fix');
   if(d.fix_timeout_s && document.activeElement!==document.getElementById('fixTimeoutSeconds')){
     document.getElementById('fixTimeoutSeconds').value=d.fix_timeout_s;
@@ -1160,6 +1193,7 @@ document.getElementById('gsvSnrValue').textContent=d.gsv_snr_count?Number(d.gsv_
   }
   document.getElementById('status').textContent='Фикс подтверждён · используется: '+(d.sat??0)+' | видно: '+(d.sat_visible??0)+' | HDOP: '+d.hdop+' | обновлено '+Math.round(d.age_ms/1000)+' с назад';
   if(map) updateLeafletPoint(lat,lng);
+  drawGlobe();
 }catch(e){}
 }
 async function refreshNetworkStatus(){
@@ -1727,6 +1761,7 @@ setInterval(()=>{if(!document.getElementById('aiTab').classList.contains('hidden
 setInterval(()=>{if(!document.getElementById('satTab').classList.contains('hidden'))refreshSatellites();},1500);
 setInterval(()=>{if(!document.getElementById('deviceTab').classList.contains('hidden'))refreshNetworkStatus();},5000);
 refreshNetworkStatus();
+initGlobe();
 selectUbxPage('gnss');
 loadMaps();
 refreshGps();
