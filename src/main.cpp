@@ -72,7 +72,7 @@ static uint8_t gpsBaudCandidateIndex = 0;
 static bool gpsBaudAutoDetected = false;
 static uint8_t gpsBaudValidSentences = 0;
 static unsigned long gpsBaudCandidateStartedMs = 0;
-static const unsigned long GPS_BAUD_PROBE_MS = 1200;
+static const unsigned long GPS_BAUD_PROBE_MS = 2500;
 String savedPointsJson = "[]";
 String lastUbxFrameHex = "";
 String ubxLastEvent = "Ожидание UBX";
@@ -1502,6 +1502,7 @@ async function refreshUart(){
   if(!d || typeof d.baud!=='number' || typeof d.rx_pin!=='number' || typeof d.tx_pin!=='number') throw new Error('В ответе /uart отсутствуют обязательные поля');
   const age=d.last_byte_age_ms<0?'байтов ещё не было':(d.last_byte_age_ms<1500?'приём идёт':'последний байт '+(d.last_byte_age_ms/1000).toFixed(1)+' с назад');
   status.textContent=age+' | '+d.baud+' бод | '+(d.baud_detected?'скорость определена автоматически':'поиск скорости…')+' | RX GPIO'+d.rx_pin+' / TX GPIO'+d.tx_pin;
+  const baudSelect=document.getElementById('uartBaud'); if(baudSelect && document.activeElement!==baudSelect) baudSelect.value=String(d.baud);
   document.getElementById('uartStats').textContent='Всего байтов: '+d.bytes_total+'\nСкорость: '+d.bytes_per_second+' байт/с\nChecksum OK: '+d.checksum_passed+'\nОшибок checksum: '+d.checksum_failed+'\nОбработано символов: '+d.chars_processed+'\nОшибок/переполнений строк: '+d.invalid_sentences;
   document.getElementById('uartLast').textContent=d.last_sentence||'Полная строка NMEA ещё не получена';
   document.getElementById('uartRecent').textContent=d.recent||'—';
@@ -2285,7 +2286,8 @@ void handleSatellites() {
 }
 
 void handleWifiScanStart() {
-  // Keep AP mode while scanning; scanning must not initiate a station connection.
+  // Enable STA capability only for scanning; do not associate with any saved network.
+  if (WiFi.getMode() != WIFI_AP_STA) WiFi.mode(WIFI_AP_STA);
   wifiScanStatus = WiFi.scanNetworks(true, true);
   JsonDocument doc; doc["started"] = wifiScanStatus == WIFI_SCAN_RUNNING; doc["status"] = wifiScanStatus;
   if (wifiScanStatus == WIFI_SCAN_FAILED) doc["error"] = "Не удалось запустить сканирование Wi-Fi";
