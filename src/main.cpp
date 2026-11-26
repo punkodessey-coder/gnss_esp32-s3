@@ -775,6 +775,20 @@ a{color:#75cfc4}hr{border:0;border-top:1px solid var(--line)}
  #map{height:43vh;min-height:250px}
 }
 @media(max-width:390px){body{padding-left:9px;padding-right:9px}.header-chip{display:none}.tab{min-width:59px;padding-left:5px;padding-right:5px}.page-header h1{font-size:21px}}
+
+.globe-card{position:relative;overflow:hidden;background:radial-gradient(ellipse at 50% 38%,#18364a 0%,#0d1b2b 52%,#0a1321 100%);border:1px solid #29475d;min-height:560px;padding:0}
+.globe-top{position:relative;z-index:2;padding:22px 24px 0;display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.globe-kicker{font-size:10px;font-weight:800;letter-spacing:.18em;color:#83b9d2}.globe-heading{font-size:23px;font-weight:750;letter-spacing:-.035em;margin:5px 0 2px;color:#f2f7fb}.globe-caption{font-size:12px;color:#9bb1c3}
+.globe-fix{display:inline-flex;align-items:center;gap:7px;padding:7px 11px;border-radius:999px;border:1px solid #3b5b68;background:#142d3b;color:#a6c7d4;font-size:10px;font-weight:800;letter-spacing:.06em}.globe-fix:before{content:'';width:7px;height:7px;border-radius:50%;background:#7c8e9b}.globe-fix.active{color:#ffe18a;border-color:#8c713a;background:#3b301d}.globe-fix.active:before{background:#ffd34f;box-shadow:0 0 12px #ffd34f}
+.globe-stage{position:relative;width:100%;height:430px;display:flex;align-items:center;justify-content:center;overflow:hidden;touch-action:pan-y}#earthCanvas{display:block;width:min(100%,620px);height:100%;touch-action:none;cursor:grab}#earthCanvas:active{cursor:grabbing}
+.globe-hint{position:absolute;bottom:15px;left:0;right:0;text-align:center;color:#8099ad;font-size:10px;letter-spacing:.03em;pointer-events:none}
+.globe-bottom{position:relative;z-index:2;padding:0 22px 20px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:end}.globe-coordinates{font:600 14px ui-monospace,SFMono-Regular,Menlo,monospace;color:#f6d978;letter-spacing:.02em}.globe-location-note{font-size:11px;color:#91a7b9;margin-top:5px}
+.globe-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}.globe-controls button{margin:0;min-width:38px;padding:8px 11px;border-radius:999px;background:#20384a;border-color:#3a5b70}.globe-controls button.primary-globe{background:#f0c85a;color:#1b2025;border-color:#f8d979}
+.globe-zoom{display:flex;align-items:center;gap:8px;padding:6px 11px;border-radius:999px;background:#102235;border:1px solid #304b61;color:#a9bdce;font-size:10px}.globe-zoom input{width:90px;min-height:0;padding:0;accent-color:#f4cb55}
+.globe-legend{position:absolute;left:24px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:8px;color:#7894a9;font-size:10px;pointer-events:none}.globe-legend span{display:flex;align-items:center;gap:7px}.globe-legend i{width:6px;height:6px;border-radius:50%;background:#f4cf59;box-shadow:0 0 8px #f4cf59}
+.globe-map-mode{display:none}.globe-card.detail-mode .globe-stage,.globe-card.detail-mode .globe-legend{display:none}.globe-card.detail-mode .globe-map-mode{display:block}.globe-card.detail-mode .globe-top{padding-bottom:16px}.globe-card.detail-mode .globe-bottom{padding-top:12px}.globe-card.detail-mode #map{height:460px;min-height:320px;border:0;border-radius:0}.globe-card.detail-mode .map-controls,.globe-card.detail-mode .map-progress{padding-left:20px;padding-right:20px}
+@media(max-width:760px){.globe-card{min-height:500px}.globe-top{padding:17px 16px 0}.globe-heading{font-size:20px}.globe-stage{height:350px}.globe-bottom{padding:0 15px 16px;grid-template-columns:1fr;gap:12px}.globe-controls{justify-content:space-between}.globe-zoom{flex:1;justify-content:center}.globe-zoom input{flex:1;max-width:130px}.globe-legend{left:13px;font-size:9px}.globe-card.detail-mode #map{height:390px;min-height:280px}}
+@media(max-width:390px){.globe-stage{height:310px}.globe-fix{font-size:9px;padding:6px 8px}.globe-controls button{padding:7px 9px}}
 </style>
 </head>
 <body>
@@ -815,8 +829,15 @@ a{color:#75cfc4}hr{border:0;border-top:1px solid var(--line)}
 <button class="gray" onclick="connectBle()">Подключить Bluetooth</button>
 <div id="bleStatus" class="small"></div>
 </div>
-<div class="card"><h2>Карта</h2>
-<div class="map-controls"><select id="mapSelect"><option value="">— Выберите карту —</option><option value="online:osm">OpenStreetMap — онлайн</option></select><button onclick="loadSelectedMap()">Загрузить карту</button></div><div class="map-progress"><progress id="tileProgress" max="1" value="0"></progress><span id="tileProgressText">Ожидание тайлов</span></div><div id="map"></div><div class="small">OpenStreetMap — единственная онлайн-карта. Остальные карты загружаются с microSD.</div>
+<section class="card globe-card" id="globeCard">
+<div class="globe-top"><div><div class="globe-kicker">LIVE GNSS POSITION</div><div class="globe-heading">Земля</div><div class="globe-caption">Интерактивный вид планеты и навигационная позиция</div></div><div id="globeFix" class="globe-fix">ОЖИДАНИЕ FIX</div></div>
+<div class="globe-stage"><canvas id="earthCanvas" aria-label="Интерактивный трёхмерный глобус Земли"></canvas><div class="globe-legend"><span><i></i> Позиция приёмника</span><span>Перетаскивайте для вращения</span></div><div class="globe-hint">ПЕРЕТАСКИВАЙТЕ · ПРИБЛИЖАЙТЕ · ИССЛЕДУЙТЕ</div></div>
+<div class="globe-map-mode"><div class="map-controls" id="mapControls"><select id="mapSelect"><option value="">— Выберите карту —</option><option value="online:osm">OpenStreetMap — онлайн</option></select><button onclick="loadSelectedMap()">Загрузить карту</button></div><div class="map-progress" id="mapProgress"><progress id="tileProgress" max="1" value="0"></progress><span id="tileProgressText">Ожидание тайлов</span></div><div id="map"></div><div class="small" style="padding:8px 20px">Названия стран, регионов, городов и улиц отображаются по мере увеличения масштаба — в пределах покрытия выбранной карты.</div></div>
+<div class="globe-bottom"><div><div class="globe-coordinates" id="globeCoords">ОЖИДАНИЕ КООРДИНАТ</div><div class="globe-location-note" id="globeLocationNote">Жёлтый маркер появится после получения координат</div></div>
+<div class="globe-controls"><button class="primary-globe" onclick="centerGlobeOnGps()">⌖ Моя позиция</button><button onclick="changeGlobeZoom(-1)">−</button><div class="globe-zoom"><span>МАСШТАБ</span><input id="globeZoom" type="range" min="0" max="8" value="0" oninput="setGlobeZoom(this.value)"></div><button onclick="changeGlobeZoom(1)">+</button></div></div>
+</section>
+<div class="card"><h2>Параметры карты</h2>
+<div class="map-controls"><select id="mapSelectUnused">
 <div class="map-actions"><button class="gray" onclick="centerOnGps()">К текущей точке</button><span id="followStatus" class="small">Автоцентрирование включено</span></div>
 </div>
 <div class="card"><div class="ubx-field"><label for="fixTimeoutSeconds">Скрывать точку после потери координат (сек.)</label><input id="fixTimeoutSeconds" type="number" min="1" max="60" value="7"></div><button class="gray" onclick="saveFixTimeout()">Сохранить тайм-аут</button><div id="mapStatus" class="map-status">Загрузка карты…</div></div>
