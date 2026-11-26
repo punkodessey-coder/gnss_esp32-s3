@@ -2,7 +2,7 @@ name: Build firmware # includes GNSS configuration-manager feature branch
 
 on:
   push:
-    branches: [main, feature/display-ble-imu, 'feature/**', 'ai/ml']
+    branches: [main, feature/display-ble-imu, 'feature/**', 'ai/ml', 'ui/**']
   pull_request:
     branches: [main]
   workflow_dispatch:
